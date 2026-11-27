@@ -14,12 +14,14 @@ const SYSTEM = [
   'Before anything destructive or hard to undo (deleting files, uninstalling, killing important processes, changing security or network settings), say exactly what you will do and wait for the user to confirm in chat.',
 ].join(' ');
 
+// Native installer (~/.local/bin), anything on PATH (WinGet, Scoop, custom), then the npm shim.
 function findClaude() {
-  const candidates = [
-    path.join(os.homedir(), '.local', 'bin', 'claude.exe'),
-    path.join(process.env.APPDATA || '', 'npm', 'claude.cmd'),
-  ];
-  for (const c of candidates) if (c && fs.existsSync(c)) return c;
+  const candidates = [path.join(os.homedir(), '.local', 'bin', 'claude.exe')];
+  for (const dir of (process.env.PATH || '').split(';')) if (dir) candidates.push(path.join(dir, 'claude.exe'));
+  candidates.push(path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'claude.exe'));
+  for (const dir of (process.env.PATH || '').split(';')) if (dir) candidates.push(path.join(dir, 'claude.cmd'));
+  candidates.push(path.join(process.env.APPDATA || '', 'npm', 'claude.cmd'));
+  for (const c of candidates) { try { if (fs.existsSync(c)) return c; } catch {} }
   return null;
 }
 

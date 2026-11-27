@@ -18,14 +18,46 @@ const PREAMBLE = [
 
 const verKey = (name) => (name.match(/(\d+)\.(\d+)\.(\d+)/) || [0, 0, 0, 0]).slice(1).map(Number);
 
-function findCodex() {
+// Bounded search for codex.exe inside an npm package folder (layout differs between Codex releases)
+function findExeIn(dir, depth = 5) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+  for (const e of entries) if (e.isFile() && e.name.toLowerCase() === 'codex.exe') return path.join(dir, e.name);
+  if (depth <= 0) return null;
+  for (const e of entries) if (e.isDirectory()) { const hit = findExeIn(path.join(dir, e.name), depth - 1); if (hit) return hit; }
+  return null;
+}
+
+// A real Codex CLI install: PATH (npm, WinGet, Scoop, standalone installer), or npm's global folder.
+function findCodexCli() {
   for (const dir of (process.env.PATH || '').split(';')) {
     if (!dir) continue;
-    for (const n of ['codex.exe', 'codex.cmd']) { const p = path.join(dir, n); if (fs.existsSync(p)) return p; }
+    const exe = path.join(dir, 'codex.exe');
+    if (fs.existsSync(exe)) return exe;
   }
-  const npm = path.join(process.env.APPDATA || '', 'npm', 'codex.cmd');
-  if (fs.existsSync(npm)) return npm;
-  // The OpenAI editor extension ships the Codex CLI
+  const appData = process.env.APPDATA || '';
+  const local = process.env.LOCALAPPDATA || '';
+  for (const p of [
+    path.join(os.homedir(), '.local', 'bin', 'codex.exe'),
+    path.join(local, 'Microsoft', 'WinGet', 'Links', 'codex.exe'),
+    path.join(local, 'Programs', 'codex', 'codex.exe'),
+    path.join(os.homedir(), 'scoop', 'shims', 'codex.exe'),
+  ]) if (fs.existsSync(p)) return p;
+  // npm i -g @openai/codex: prefer the native binary over the .cmd shim
+  for (const pkg of ['codex', 'codex-win32-x64']) {
+    const hit = findExeIn(path.join(appData, 'npm', 'node_modules', '@openai', pkg));
+    if (hit) return hit;
+  }
+  for (const dir of [...(process.env.PATH || '').split(';'), path.join(appData, 'npm')]) {
+    if (!dir) continue;
+    const shim = path.join(dir, 'codex.cmd');
+    if (fs.existsSync(shim)) return shim;
+  }
+  return null;
+}
+
+// The OpenAI extension for VS Code / Cursor / Windsurf bundles a Codex CLI. Only used when the user opts in.
+function findEditorCodex() {
   for (const editor of ['.vscode', '.vscode-insiders', '.cursor', '.windsurf']) {
     const root = path.join(os.homedir(), editor, 'extensions');
     let dirs = [];
@@ -34,6 +66,10 @@ function findCodex() {
     for (const d of dirs) { const p = path.join(root, d, 'bin', 'windows-x86_64', 'codex.exe'); if (fs.existsSync(p)) return p; }
   }
   return null;
+}
+
+function findCodex({ allowEditor = false } = {}) {
+  return findCodexCli() || (allowEditor ? findEditorCodex() : null);
 }
 
 // Use the model from ~/.codex/config.toml when the account can use it; otherwise the first model Codex lists.
@@ -53,6 +89,58 @@ function windowLabel(mins) {
   return `${mins}m`;
 }
 
+// Normalises Codex rate-limit windows (app-server camelCase or session-log snake_case) to
+// [{ label, pct, resetsAt(ms), mins }], shortest window first: paid plans give 5h then 7d (weekly).
+function normalizeWindows(list, baseMs = Date.now()) {
+  return list.filter(Boolean).map((w) => {
+    const mins = w.windowDurationMins ?? w.window_minutes ?? null;
+    const pct = Number(w.usedPercent ?? w.used_percent ?? 0) || 0;
+    let resetsAt = w.resetsAt ?? w.resets_at ?? null;
+    if (resetsAt) resetsAt *= 1000;
+    else if (w.resets_in_seconds != null) resetsAt = baseMs + w.resets_in_seconds * 1000;
+    return { label: windowLabel(mins), pct, resetsAt: resetsAt || 0, mins: mins || 0 };
+  }).sort((a, b) => a.mins - b.mins);
+}
+
+// Fallback for Codex versions without app-server rate limits: the newest `token_count` event
+// in ~/.codex/sessions carries the same windows. Only that event's rate_limits field is read.
+function limitsFromSessions() {
+  const root = path.join(os.homedir(), '.codex', 'sessions');
+  const files = [];
+  const now = new Date();
+  for (let d = 0; d < 8 && files.length < 6; d++) {
+    const day = new Date(now - d * 86400000);
+    const dir = path.join(root, String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, '0'), String(day.getDate()).padStart(2, '0'));
+    let names = [];
+    try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); } catch { continue; }
+    for (const n of names) { try { files.push({ p: path.join(dir, n), t: fs.statSync(path.join(dir, n)).mtimeMs }); } catch {} }
+  }
+  files.sort((a, b) => b.t - a.t);
+  for (const f of files.slice(0, 6)) {
+    let text;
+    try {
+      const fd = fs.openSync(f.p, 'r');
+      const size = fs.fstatSync(fd).size, len = Math.min(size, 512 * 1024);
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      fs.closeSync(fd);
+      text = buf.toString('utf8');
+    } catch { continue; }
+    const lines = text.split('\n').filter((l) => l.includes('"rate_limits"'));
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const m = JSON.parse(lines[i]);
+        const rl = m.payload?.rate_limits || m.rate_limits;
+        if (!rl) continue;
+        const base = m.timestamp ? Date.parse(m.timestamp) : f.t;
+        const windows = normalizeWindows([rl.primary, rl.secondary], base);
+        if (windows.length) return { windows, plan: rl.plan_type || null, at: base, source: 'sessions' };
+      } catch {}
+    }
+  }
+  return null;
+}
+
 function errorText(raw) {
   let s = String(raw || '');
   for (let i = 0; i < 2; i++) { try { const j = JSON.parse(s); s = j.error?.message || j.message || s; } catch { break; } }
@@ -62,17 +150,24 @@ function errorText(raw) {
 class CodexBridge extends EventEmitter {
   constructor() {
     super();
-    this.exe = findCodex();
+    this.exe = null;
+    this.editorExe = null;
     this.threadId = null;
     this.child = null;
     this.model = null;
   }
 
+  // Finds Codex. The copy bundled with an editor extension only counts when allowEditor is on.
+  detect(allowEditor = false) {
+    this.editorExe = findEditorCodex();
+    this.exe = findCodex({ allowEditor });
+    return this.exe;
+  }
+
   get busy() { return !!this.child; }
 
   send(prompt, mode = 'auto') {
-    if (!this.exe) this.exe = findCodex();
-    if (!this.exe) { this.emit('event', { kind: 'error', text: 'Codex CLI not found.' }); return; }
+    if (!this.exe) { this.emit('event', { kind: 'error', text: 'Codex CLI not found.' }); this.emit('event', { kind: 'end' }); return; }
     if (this.child) return;
     this.model = pickModel();
     const args = this.threadId ? ['exec', 'resume', this.threadId] : ['exec'];
@@ -141,11 +236,14 @@ class CodexBridge extends EventEmitter {
 
   reset() { this.stop(); this.threadId = null; }
 
-  // Reads plan limits through the app-server protocol (no model call, no usage).
-  readLimits() {
+  // Plan limits: app-server first (no model call, no usage), else the newest session log.
+  async readLimits() {
+    if (!this.exe) return null;
+    return (await this.limitsFromAppServer()) || limitsFromSessions();
+  }
+
+  limitsFromAppServer() {
     return new Promise((resolve) => {
-      if (!this.exe) this.exe = findCodex();
-      if (!this.exe) return resolve(null);
       const p = spawn(this.exe, ['app-server'], { cwd: os.tmpdir(), windowsHide: true, shell: this.exe.endsWith('.cmd') });
       let buf = '', done = false;
       const finish = (v) => { if (done) return; done = true; clearTimeout(timer); try { p.kill(); } catch {} resolve(v); };
@@ -160,12 +258,11 @@ class CodexBridge extends EventEmitter {
           let m; try { m = JSON.parse(line); } catch { continue; }
           if (m.id === 1) { send({ method: 'initialized' }); send({ id: 2, method: 'account/rateLimits/read' }); }
           else if (m.id === 2) {
-            const rl = m.result?.rateLimits;
+            // An error here (older Codex without this method) falls back to the session logs
+            const rl = m.result?.rateLimits || m.result?.rateLimitsByLimitId?.codex;
             if (!rl) return finish(null);
-            const windows = [rl.primary, rl.secondary].filter(Boolean).map((w) => ({
-              label: windowLabel(w.windowDurationMins), pct: Number(w.usedPercent) || 0, resetsAt: (w.resetsAt || 0) * 1000,
-            }));
-            finish({ windows, plan: rl.planType || null, at: Date.now() });
+            const windows = normalizeWindows([rl.primary, rl.secondary]);
+            finish(windows.length ? { windows, plan: rl.planType || null, at: Date.now(), source: 'app-server' } : null);
           }
         }
       });
@@ -177,3 +274,5 @@ class CodexBridge extends EventEmitter {
 }
 
 module.exports = CodexBridge;
+module.exports.normalizeWindows = normalizeWindows;
+module.exports.limitsFromSessions = limitsFromSessions;

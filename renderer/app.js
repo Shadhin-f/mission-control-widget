@@ -787,6 +787,9 @@ function applyAi() {
   const list = ['claude', 'codex'].filter((p) => ai[p]);
   document.body.classList.toggle('no-ai', !list.length);
   document.body.classList.toggle('has-claude', !!ai.claude);
+  document.body.classList.toggle('has-codex', !!ai.codex);
+  // Offer the editor-bundled Codex only where one exists and no real CLI was found
+  $('#set-codex-editor').style.display = state.settings.codexEditorAvailable && (!ai.codex || state.settings.codexFromEditor) ? '' : 'none';
   const pref = state.settings.chatProvider;
   const prev = state.provider;
   state.provider = list.includes(pref) ? pref : list[0] || null;

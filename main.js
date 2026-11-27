@@ -26,7 +26,6 @@ if (!app.requestSingleInstanceLock()) {
   const claude = new ClaudeBridge();
   const codex = new CodexBridge();
   // Which AI CLIs are installed decides whether the chat and the usage chip exist at all
-  if (process.env.MC_NO_AI) { claude.exe = null; codex.exe = null; } // dev: preview the no-AI layout
   const aiAvailable = () => ({ claude: !!claude.exe, codex: !!codex.exe });
   const anyAi = () => !!(claude.exe || codex.exe);
   const bridgeFor = (p) => (p === 'codex' ? codex : claude);
@@ -187,10 +186,17 @@ if (!app.requestSingleInstanceLock()) {
     settings[key] = value;
     Settings.save(settings);
     if (key === 'openAtLogin') applyLoginItem();
+    if (key === 'codexFromEditor') {
+      codex.reset();
+      codex.detect(!!value);
+      if (!codex.exe) { settings.codexLimits = null; Settings.save(settings); }
+      sendLimits();
+      refreshCodexLimits();
+    }
     send('settings', publicSettings());
     updateTray();
   }
-  const publicSettings = () => ({ ...settings, claudeFound: !!claude.exe, ai: aiAvailable() });
+  const publicSettings = () => ({ ...settings, claudeFound: !!claude.exe, ai: aiAvailable(), codexEditorAvailable: !!codex.editorExe });
 
   // ---- IPC ----
   ipcMain.on('mouse:interactive', (_e, on) => { if (win) win.setIgnoreMouseEvents(!on, { forward: true }); });
@@ -286,6 +292,9 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     app.setAppUserModelId('com.missioncontrol.widget');
     settings = Settings.load();
+    // A real Codex CLI always counts; the copy bundled with an editor extension only when opted in
+    codex.detect(!!settings.codexFromEditor);
+    if (process.env.MC_NO_AI) { claude.exe = null; codex.exe = null; } // dev: preview the no-AI layout
     createWindow();
     // Keep sign-in fast: verify the startup task once things settle. Dev capture runs never touch it,
     // so a test copy can't steal startup from the real install.
@@ -320,6 +329,12 @@ if (!app.requestSingleInstanceLock()) {
     await wait(4500);
     await js("document.getElementById('btn-pin').click()"); // keep panel open while the test steals focus
     await shot('1-collapsed');
+    if (process.env.MC_DEMO_CODEX) { // preview a paid Codex plan in the usage chip (sample numbers)
+      await js(`state.settings.ai.codex = true; applyAi(); const n = Date.now();
+        limits = { ...(limits || {}), codex: { plan: 'plus', at: n, windows: [{ label: '5h', pct: 42, resetsAt: n + 3600e3 }, { label: '7d', pct: 18, resetsAt: n + 3 * 864e5 }] } };
+        renderLimits(); showLimRow('codex')`);
+      await wait(900); await shot('1b-codex-demo');
+    }
     await js("document.getElementById('shell').classList.add('hover')"); await wait(900); await shot('2-hover');
     await js("document.getElementById('shell').classList.remove('hover')");
     send('ui:open', 'panel'); await wait(2500); await shot('3-overview');

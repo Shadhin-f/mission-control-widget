@@ -119,6 +119,7 @@ button { cursor: pointer; background: none; border: 0; }
 /* No Claude Code and no Codex: hide everything AI, keep stats + pet, and re-centre the notch */
 body.no-ai .ai-only, body.no-ai .side.right { display: none !important; }
 body:not(.has-claude) .claude-only { display: none !important; }
+body:not(.has-codex) .codex-only, body:not(.has-codex) .lim-row.codex, body:not(.has-codex) #chat-prov { display: none !important; }
 body.no-ai #shell:not(.mode-panel):not(.mode-chat) { width: 420px; }
 body.no-ai #shell.hover:not(.mode-panel):not(.mode-chat) { width: 440px; }
 body.no-ai #shell:not(.mode-panel):not(.mode-chat) #bar { grid-template-columns: 1fr 62px; }

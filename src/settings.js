@@ -11,6 +11,7 @@ const DEFAULTS = {
   claudeLimits: null,
   codexLimits: null,
   chatProvider: 'auto',
+  codexFromEditor: false,
   speedHistory: [],
 };
 

@@ -62,8 +62,12 @@ and a built-in AI chat that can control your PC through
 - **Optional:** an **NVIDIA GPU** with `nvidia-smi` (it ships with the driver) for GPU / VRAM /
   temperature stats. Other GPUs show "No NVIDIA data".
 - **Optional:** the **Claude Code CLI** and/or the **OpenAI Codex CLI**, installed and signed in,
-  for the chat and usage limits. Codex is found on `PATH`, in npm's global folder, or bundled inside
-  the OpenAI extension for VS Code, Cursor or Windsurf. Everything else works without either.
+  for the chat and usage limits. Everything else works without either, and anything for a CLI that
+  isn't installed (its usage chip, chat option and settings) stays hidden.
+  - Claude Code is found from the native installer (`~/.local/bin`), `PATH`, WinGet or npm.
+  - Codex is found on `PATH` (npm, WinGet, Scoop, standalone) or in npm's global folder. The copy
+    bundled inside the OpenAI extension for VS Code / Cursor / Windsurf is **not** used unless you
+    turn on **Settings → Use Codex from your code editor** (shown only when such a copy exists).
 
 ## Install and run
 
@@ -135,8 +139,10 @@ Claude is told to describe any destructive action and wait for your confirmation
 - If the model in `~/.codex/config.toml` isn't available on your account, the widget picks the
   first model Codex lists for you. Your config file is never changed.
 - Limits come from `codex app-server` (`account/rateLimits/read`), which costs no usage, so they
-  refresh every 5 minutes and after every Codex reply. The chip shows the windows your plan has: 5h
-  and 7d on paid plans, or a single 30d window on the free plan.
+  refresh every 5 minutes and after every Codex reply. Paid plans (Plus, Pro, Business) show the
+  **5-hour** and **weekly** windows, like Claude; the free plan only has a single 30-day window.
+- Older Codex versions without that method fall back to the newest usage event Codex writes to
+  `~/.codex/sessions` (only its `rate_limits` field is read).
 
 ### Claude usage limits (5h / 7d)
 
@@ -204,6 +210,7 @@ variables:
   above). `MC_TABS=overview,network` limits which tabs are captured.
 - `MC_DIAG=1` logs running CSS animations, which helps keep idle GPU use low.
 - `MC_NO_AI=1` pretends neither Claude Code nor Codex is installed, to preview that layout.
+- `MC_DEMO_CODEX=1` (with `MC_SHOTS`) previews the usage chip with sample paid-plan Codex numbers.
 
 Dev runs with these variables never touch the startup task, so a test copy can't take over
 launch-at-sign-in from your real install.
