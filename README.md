@@ -3,7 +3,8 @@
 **macOS support:** The macOS backend is implemented in `src/macos`. See [MACOS.md](MACOS.md) for setup, feature coverage and permission requirements.
 
 **Rust edition:** [`rust/`](rust/README.md) holds a Tauri build with the backend rewritten in Rust. It runs the same
-interface and features in a 5 MB app instead of Electron's ~300 MB.
+interface and features in a 5 MB app instead of Electron's ~300 MB. **Just want to install it?** Ready-made installers for
+Windows and Apple Silicon Macs are in [`installers/`](installers/README.md); no developer tools needed.
 
 A futuristic system widget for Windows and macOS that hangs from the top-center of your screen like a notch,
 with an animated robot pet, live PC stats, device controls, internet speed tests, a cache cleaner,
@@ -211,6 +212,11 @@ one edition at a time, because both sit in the same spot at the top of the scree
 
 > **Status:** fully tested on Windows 11. The macOS build compiles and is built by CI, but has not
 > been run on a Mac yet. Reports are welcome.
+
+**No build needed:** to just install the Rust edition, use the installers in
+[`installers/`](installers/README.md): `Mission Control_1.0.0_x64-setup.exe` for Windows and
+`Mission Control_1.0.0_aarch64.dmg` for Apple Silicon Macs. The steps below are for building it
+yourself.
 
 #### Windows
 
