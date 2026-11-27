@@ -6,7 +6,10 @@
   "main": "main.js",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "postinstall": "node scripts/build-macos.js",
+    "test": "node --test test/*.test.js",
+    "package:mac": "node scripts/package-macos.js"
   },
   "keywords": [
     "electron",
@@ -24,15 +27,16 @@
   },
   "license": "MIT",
   "os": [
-    "win32"
+    "win32",
+    "darwin"
   ],
   "engines": {
     "node": ">=18"
   },
-  "dependencies": {
-    "koffi": "^3.3.8"
-  },
   "devDependencies": {
     "electron": "^45.5.0"
+  },
+  "optionalDependencies": {
+    "koffi": "^3.3.8"
   }
 }

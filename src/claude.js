@@ -1,3 +1,4 @@
+const { findUnixCli, stopTree } = require('./cli-platform');
 // Bridge to the locally installed Claude Code CLI (uses your existing Claude Code login).
 // Each message runs `claude -p` with stream-json output and resumes the same session.
 const { spawn, execFile } = require('child_process');
@@ -7,15 +8,16 @@ const os = require('os');
 const path = require('path');
 
 const SYSTEM = [
-  "You are the assistant inside the user's \"Mission Control\" desktop widget on their Windows 11 PC.",
+  `You are the assistant inside the user's \"Mission Control\" desktop widget on their ${process.platform === 'darwin' ? 'macOS Mac' : 'Windows 11 PC'}.`,
   'The user controls the PC through you: opening apps and folders, managing files, checking and changing system state.',
-  'Use PowerShell for system actions. Start GUI apps detached (Start-Process) so you do not wait on them.',
+  process.platform === 'darwin' ? 'Use macOS shell commands and AppleScript for system actions. Open apps with open -a.' : 'Use PowerShell for system actions. Start GUI apps detached (Start-Process) so you do not wait on them.',
   'The chat window is small: answer in a few short sentences or a short list, no wide tables.',
   'Before anything destructive or hard to undo (deleting files, uninstalling, killing important processes, changing security or network settings), say exactly what you will do and wait for the user to confirm in chat.',
 ].join(' ');
 
 // Native installer (~/.local/bin), anything on PATH (WinGet, Scoop, custom), then the npm shim.
 function findClaude() {
+  if (process.platform !== 'win32') return findUnixCli('claude');
   const candidates = [path.join(os.homedir(), '.local', 'bin', 'claude.exe')];
   for (const dir of (process.env.PATH || '').split(';')) if (dir) candidates.push(path.join(dir, 'claude.exe'));
   candidates.push(path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Links', 'claude.exe'));
@@ -48,7 +50,7 @@ class ClaudeBridge extends EventEmitter {
       '--permission-mode', mode, '--permission-prompts', 'none', '--append-system-prompt', SYSTEM];
     if (this.sessionId) args.push('--resume', this.sessionId);
     const isCmd = this.exe.endsWith('.cmd');
-    const child = spawn(this.exe, args, { cwd: os.homedir(), windowsHide: true, shell: isCmd, env: { ...process.env } });
+    const child = spawn(this.exe, args, { cwd: os.homedir(), detached: process.platform !== 'win32', windowsHide: true, shell: isCmd, env: { ...process.env } });
     this.child = child;
     this.emit('event', { kind: 'start' });
     let buf = '', stderr = '', gotResult = false;
@@ -147,7 +149,7 @@ class ClaudeBridge extends EventEmitter {
   stop() {
     if (!this.child) return;
     this.stopped = true;
-    execFile('taskkill', ['/PID', String(this.child.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    stopTree(this.child);
   }
 
   reset() { this.stop(); this.sessionId = null; }

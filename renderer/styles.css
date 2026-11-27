@@ -202,8 +202,8 @@ canvas { display: block; width: 100%; }
 #cores i b { position: absolute; left: 0; right: 0; bottom: 0; height: 0; border-radius: 3px; background: linear-gradient(0deg, rgba(62, 243, 255, .35), var(--cyan)); box-shadow: 0 0 8px rgba(62, 243, 255, .5); transition: height .8s var(--ease); }
 
 #disks { display: flex; flex-direction: column; gap: 9px; }
-.disk { display: grid; grid-template-columns: 28px 1fr 130px; align-items: center; gap: 10px; font-variant-numeric: tabular-nums; }
-.disk b { font-size: 13px; }
+.disk { display: grid; grid-template-columns: minmax(45px, 85px) minmax(20px, 1fr) 130px; align-items: center; gap: 10px; font-variant-numeric: tabular-nums; }
+.disk b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .disk .bar { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .06); overflow: hidden; }
 .disk .bar i { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--cyan), var(--violet)); transition: width 1s var(--ease); }
 .disk.low .bar i { background: linear-gradient(90deg, var(--amber), var(--red)); }

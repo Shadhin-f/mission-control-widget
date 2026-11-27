@@ -364,8 +364,11 @@ mc.onStats((s) => {
   setGauge('#g-cpu', s.cpu, `${state.static.cores || s.cores.length} threads`);
   setGauge('#g-ram', ramPct, `${(s.mem.used / GB).toFixed(1)} / ${(s.mem.total / GB).toFixed(1)} GB`);
   if (gpu) {
-    setGauge('#g-gpu', gpu.util, `${gpu.temp ?? '--'}°C${gpu.power != null ? ` · ${Math.round(gpu.power)} W` : ''}`);
-    setGauge('#g-vram', (gpu.vramUsed / gpu.vramTotal) * 100, `${(gpu.vramUsed / 1024).toFixed(1)} / ${(gpu.vramTotal / 1024).toFixed(0)} GB`);
+    setGauge('#g-gpu', gpu.util ?? 0, `${gpu.temp ?? '--'}°C${gpu.power != null ? ` · ${Math.round(gpu.power)} W` : ''}`);
+    setGauge('#g-vram', gpu.vramTotal ? (gpu.vramUsed / gpu.vramTotal) * 100 : 0, gpu.unified ? 'Unified memory · see RAM' : gpu.vramTotal ? `${(gpu.vramUsed / 1024).toFixed(1)} / ${(gpu.vramTotal / 1024).toFixed(0)} GB` : 'Unavailable');
+    if (gpu.temp == null && gpu.util != null) $('#g-gpu .gsub').textContent = gpu.name;
+    if (gpu.unified) $('#g-vram .gv b').textContent = 'Shared';
+    if (gpu.util == null) $('#g-gpu .gsub').textContent = `${gpu.name} · load unavailable`;
   } else { setGauge('#g-gpu', 0, 'No NVIDIA data'); setGauge('#g-vram', 0, '--'); }
   if (!coresBuilt) { $('#cores').innerHTML = s.cores.map(() => '<i><b></b></i>').join(''); coresBuilt = true; }
   $$('#cores b').forEach((b, i) => { b.style.height = `${s.cores[i] || 0}%`; });
@@ -379,17 +382,17 @@ mc.onStats((s) => {
   $('#nw-down').textContent = `↓ ${fmtRate(s.net.down)}`;
   $('#nw-up').textContent = `↑ ${fmtRate(s.net.up)}`;
   const a = s.net.adapter;
-  if (a) $('#adapter').textContent = `${a.wifi ? 'Wi-Fi' : 'Wired'} · ${a.name} · link ${a.linkBps >= 1e9 ? `${(a.linkBps / 1e9).toFixed(1)} Gbps` : `${Math.round(a.linkBps / 1e6)} Mbps`}`;
+  if (a) $('#adapter').textContent = `${a.wifi ? 'Wi-Fi' : 'Wired'} · ${a.name} · link ${a.linkBps >= 1e9 ? `${(a.linkBps / 1e9).toFixed(1)} Gbps` : `${a.linkBps ? Math.round(a.linkBps / 1e6) + ' Mbps' : a.name}`}`;
 });
 
 function renderDisks(disks) {
   const box = $('#disks');
   if (box.childElementCount !== disks.length) {
-    box.innerHTML = disks.map((d) => `<div class="disk" data-d="${d.drive}"><b>${d.drive}</b><div class="bar"><i></i></div><span></span></div>`).join('');
+    box.innerHTML = disks.map((d) => `<div class="disk" data-d="${esc(d.drive)}"><b title="${esc(d.drive)}">${esc(d.drive === '/' ? 'System' : d.drive.split('/').pop() || d.drive)}</b><div class="bar"><i></i></div><span></span></div>`).join('');
   }
   let tot = 0, free = 0;
   for (const d of disks) {
-    const row = box.querySelector(`[data-d="${d.drive}"]`);
+    const row = box.querySelector(`[data-d="${CSS.escape(d.drive)}"]`);
     if (!row) continue;
     const used = 1 - d.free / d.total;
     row.querySelector('i').style.width = `${(used * 100).toFixed(1)}%`;
@@ -783,6 +786,11 @@ $('#chat-prov').addEventListener('click', async (e) => {
 
 // Which AI CLIs exist decides what the widget shows: chat, provider switch, usage chip
 function applyAi() {
+  if (state.settings.platform === 'darwin') {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const node of nodes) if (node.parentElement.tagName !== 'SCRIPT') node.textContent = node.textContent.replace(/Windows settings/g,'System Settings').replace(/sign in to Windows/g,'sign in to your Mac').replace(/Switch Windows/g,'Switch macOS').replace(/PC control/g,'Mac control');
+  }
   const ai = state.settings.ai || {};
   const list = ['claude', 'codex'].filter((p) => ai[p]);
   document.body.classList.toggle('no-ai', !list.length);
@@ -891,7 +899,7 @@ const controls = {
     // Wired network
     const a = state.stats?.net?.adapter;
     const online = state.latency?.status === 'online';
-    if (a && !a.wifi) this.tile('#t-net', online, `${a.linkBps >= 1e9 ? `${(a.linkBps / 1e9).toFixed(0)} Gbps` : `${Math.round(a.linkBps / 1e6)} Mbps`} · ${online ? 'Online' : state.latency?.status || '--'}`);
+    if (a && !a.wifi) this.tile('#t-net', online, `${a.linkBps >= 1e9 ? `${(a.linkBps / 1e9).toFixed(0)} Gbps` : `${a.linkBps ? Math.round(a.linkBps / 1e6) + ' Mbps' : a.name}`} · ${online ? 'Online' : state.latency?.status || '--'}`);
     else this.tile('#t-net', false, 'Not connected');
     // Media
     const m = st.media, card = $('#media');
@@ -937,7 +945,7 @@ const controls = {
 
   renderBrightness() {
     const box = $('#sl-bright');
-    if (!this.mons.length) { box.innerHTML = '<div class="sl"><div class="sl-h"><span class="sl-name"><em>Brightness</em></span></div><div class="sl-empty">Not available: turn on DDC/CI in your monitor\'s menu to control it here.</div></div>'; return; }
+    if (!this.mons.length) { box.innerHTML = '<div class="sl"><div class="sl-h"><span class="sl-name"><em>Brightness</em></span></div><div class="sl-empty">This display does not expose brightness control. Use its buttons or Display settings.</div></div>'; return; }
     box.innerHTML = this.mons.map((m, n) => {
       const pct = m.max > m.min ? (m.cur - m.min) / (m.max - m.min) : 0;
       return `<div class="sl"><div class="sl-h"><span class="sl-name"><em>Brightness</em><span>${esc(this.mons.length > 1 ? `Display ${n + 1}` : shortName(m.name))}</span></span><b class="sl-v">${Math.round(pct * 100)}%</b></div>
@@ -983,14 +991,14 @@ const controls = {
           <div class="d-txt"><b>${esc(d.name)}</b><small>${d.connected ? 'Connected' : 'Paired'}</small></div></div>`).join('');
       if (this.bt && !this.bt.length) html += '<div class="dr-empty">No paired devices</div>';
       if (!this.bt) html += '<div class="dr-empty">Looking for devices...</div>';
-      html += '<div class="dr-note" style="color:var(--dim);background:none;border-color:var(--line)">Windows only lets its own Settings app connect or pair Bluetooth devices.<button data-act="bt-settings">Connect or add a device</button></div>';
+      html += '<div class="dr-note" style="color:var(--dim);background:none;border-color:var(--line)">Use system settings to connect or pair Bluetooth devices.<button data-act="bt-settings">Connect or add a device</button></div>';
     } else if (k === 'wifi') {
       const w = this.wifi, r = this.radio('WiFi');
       if (!w || !w.available) html = '<div class="dr-empty">No Wi-Fi adapter found</div>';
       else if (r && r.state !== 'On') html = '<div class="dr-note">Wi-Fi is off.<button data-act="wifi-on">Turn on</button></div>';
       else {
         if (w.current?.state === 'connected') html += `<div class="dev conn"><i class="d-ico">${ICONS.wifi}</i><div class="d-txt"><b>${esc(w.current.ssid)}</b><small>Connected · ${w.current.signal}%</small></div><button class="d-act" data-act="wifi-off">Disconnect</button></div>`;
-        if (w.needsLocation) html += '<div class="dr-note">Windows needs Location turned on to list Wi-Fi networks.<button data-act="location">Open location settings</button></div>';
+        if (w.needsLocation) html += `<div class="dr-note">Location permission is required to list Wi-Fi networks.${state.settings.platform === 'darwin' ? '<button data-act="location-request">Grant Wi-Fi access</button>' : ''}<button data-act="location">Open location settings</button></div>`;
         html += (w.networks || []).filter((n) => n.ssid !== w.current?.ssid).map((n, i) => {
           const bars = Math.ceil(n.signal / 25);
           return `<div class="dev" style="animation-delay:${i * 40}ms"><i class="d-ico">${ICONS.wifi}</i><div class="d-txt"><b>${esc(n.ssid)}</b><small>${n.secure ? 'Secured' : 'Open'}${n.known ? ' · Saved' : ''}</small></div>
@@ -1058,6 +1066,7 @@ $('#dr-body').addEventListener('click', async (e) => {
   if (act === 'wifi-on') controls.toggle('wifi');
   if (act === 'bt-settings') mc.openSettings('bluetooth');
   if (act === 'wifi-settings') mc.openSettings('wifi');
+  if (act === 'location-request') { try { const r = await mc.sys('requestLocation'); toast(r.ok ? 'Wi-Fi access granted' : 'Allow Mission Control Helper in Location settings'); controls.refreshWifi(); } catch (e) { toast(e.message); } }
   if (act === 'location') mc.openSettings('location');
   if (act === 'wifi-off') { await mc.wifiDisconnect(); toast('Disconnected'); controls.refreshWifi(); }
   if (act === 'wifi-connect') {
@@ -1118,10 +1127,11 @@ $('.m-ctl').addEventListener('click', async (e) => {
 // Power plans + actions
 $('#plans').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-plan]');
-  if (!b || b.classList.contains('on')) return;
+  if (!b) return;
+  if (b.classList.contains('on')) return;
   controls.plans.forEach((p) => { p.active = p.guid === b.dataset.plan; });
   controls.renderPlans();
-  await mc.setPowerPlan(b.dataset.plan);
+  try { await mc.setPowerPlan(b.dataset.plan); } catch (e) { toast(e.message); }
   controls.refreshPlans();
 });
 const armTimers = {};
