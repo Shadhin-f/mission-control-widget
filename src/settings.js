@@ -13,13 +13,16 @@ const DEFAULTS = {
   codexLimits: null,
   chatProvider: 'auto',
   codexFromEditor: false,
+  extremeMode: false,
+  extremeBackup: null,
   speedHistory: [],
 };
 
 const file = () => path.join(app.getPath('userData'), 'settings.json');
 
 function load() {
-  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(file(), 'utf8')) }; } catch { return { ...DEFAULTS }; }
+  // Strip a byte-order mark (some editors add one) so a hand-edited file still loads
+  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(file(), 'utf8').replace(/^﻿/, '')) }; } catch { return { ...DEFAULTS }; }
 }
 
 function save(s) {

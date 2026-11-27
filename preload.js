@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('mc', {
   onBlur: on('win:blur'),
   onOpen: on('ui:open'),
   onSettings: on('settings'),
+  onEdgeHot: on('edge:hot'),
   onSpeed: on('speed:progress'),
   onCleaner: on('cleaner:progress'),
   onAi: on('ai'),

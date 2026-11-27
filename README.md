@@ -197,6 +197,29 @@ If you already deleted the folder without step 1, remove the startup entry by ha
 - **macOS:** run `rm ~/Library/LaunchAgents/com.missioncontrol.widget.plist`, or remove it from
   **Login Items** if you used the packaged app.
 
+### Extreme mode (Windows only)
+
+Turn on **Settings → Extreme mode** (or **Extreme mode** in the tray menu) to restyle the real
+Windows taskbar to match the widget:
+
+- a navy taskbar and Start menu, with the running-app indicators in the widget's cyan
+- a thin cyan-to-violet glow line along the taskbar's top edge that grows in when you switch the
+  mode on and sends a light sweep across when the pointer reaches the taskbar
+
+It changes Windows' own accent-colour settings (the same ones as **Settings → Personalization →
+Colors**), so it doesn't replace or inject code into the taskbar: tray icons, jump lists, previews,
+notifications and Win+number shortcuts all keep working. It also turns on "Show accent colour on
+Start and taskbar" and the dark system theme, which that option needs.
+
+- **Your colours come back** when you turn it off, and whenever the widget quits (it's applied again
+  on the next launch). The originals are saved first, including settings that didn't exist; if the
+  widget ever crashes while the mode is on, the saved originals are kept and used on the next restore.
+- **Cost:** no extra process (the glow line is a 5 px window opened from the widget's own page), and
+  nothing animates while idle.
+- The glow line shows only for a bottom taskbar that isn't set to auto-hide, and hides with the
+  widget while a fullscreen app is running.
+- Windows blends the taskbar colour with your wallpaper, so the exact navy varies slightly.
+
 ### Pet-only idle layout
 
 In **Settings**, enable **Show sides only on hover** to keep only the pet visible while collapsed. Hover over the pet to reveal the stats and quick actions on either side. Move away to hide them again, or click the pet to open Mission Control. The preference is saved across launches and works on Windows and macOS. It is off by default, preserving the existing layout. Fullscreen visibility continues to follow **Idle during fullscreen**.
@@ -283,6 +306,8 @@ src/processes.js     tasklist + window enumeration, end task
 src/cleaner.js       Cache / junk scanner and cleaner
 src/claude.js        Claude Code CLI bridge (chat streaming + usage limits)
 src/codex.js         Codex CLI bridge (detection, chat + resume, app-server usage limits)
+src/extreme-windows.js  Extreme mode: themes the native taskbar via Windows accent settings,
+                     with exact backup / restore, and finds the taskbar for the glow line
 src/syscontrol.js    Controls tab backend: drives sysctl.ps1, netsh (Wi-Fi), powercfg
 src/sysctl.ps1       Long-lived helper (started on first use, stops when idle): Core Audio,
                      Wi-Fi/Bluetooth radios, paired devices, media session, DDC/CI

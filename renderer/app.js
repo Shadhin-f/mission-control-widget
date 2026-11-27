@@ -641,10 +641,48 @@ $('#cf-ok').addEventListener('click', async () => {
   }
 });
 
+// ---------------- Extreme mode glow line (Windows) ----------------
+// A 5 px window on the taskbar's top edge, opened from this page so it shares this renderer process.
+// It only animates on events: growing in when enabled, a light sweep when the pointer reaches the
+// taskbar, and shrinking away when disabled. While idle it draws nothing.
+const EDGE_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+#e { position: absolute; left: 0; right: 0; top: 1px; height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(62,243,255,.9) 22%, rgba(155,123,255,.9) 50%, rgba(62,243,255,.9) 78%, transparent);
+  box-shadow: 0 0 6px rgba(62,243,255,.55); opacity: .5; transform: scaleX(0);
+  transition: transform .9s cubic-bezier(.2,1.12,.32,1), opacity .45s ease; }
+#e.in { transform: scaleX(1); }
+#e.hot { opacity: 1; }
+#e::after { content: ''; position: absolute; top: -1px; bottom: -1px; left: -220px; width: 200px; opacity: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.95), transparent); }
+#e.hot::after { animation: sweep 1.15s cubic-bezier(.45,0,.2,1) 1; }
+@keyframes sweep { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(calc(100vw + 440px)); opacity: 0; } }
+</style></head><body><i id="e"></i></body></html>`;
+const edge = {
+  w: null,
+  el() { try { return this.w && !this.w.closed ? this.w.document.getElementById('e') : null; } catch { return null; } },
+  sync(on) {
+    if (on && !this.el()) {
+      this.w = window.open('about:blank', 'mc-edge');
+      if (!this.w) return;
+      this.w.document.open(); this.w.document.write(EDGE_HTML); this.w.document.close();
+      setTimeout(() => this.el()?.classList.add('in'), 120);
+    } else if (!on && this.w) {
+      const w = this.w; this.w = null;
+      try { w.document.getElementById('e').classList.remove('in'); } catch {}
+      setTimeout(() => { try { w.close(); } catch {} }, 700);
+    }
+  },
+  hot(v) { this.el()?.classList.toggle('hot', !!v); },
+};
+mc.onEdgeHot((v) => edge.hot(v));
+
 // ---------------- settings ----------------
 function applySettings(s) {
   state.settings = s;
   document.body.classList.toggle('pet-only', !!s.hideSidesUntilHover);
+  document.body.classList.toggle('is-win', s.platform === 'win32');
+  edge.sync(s.platform === 'win32' && !!s.extremeMode);
   $$('[data-set]').forEach((el) => { if (el.type === 'checkbox') el.checked = !!s[el.dataset.set]; else el.value = s[el.dataset.set]; });
   $('#chat-mode').value = s.chatMode || 'auto';
   applyAi();

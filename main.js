@@ -19,8 +19,12 @@ if (!app.requestSingleInstanceLock()) {
   const CodexBridge = require('./src/codex');
   const SysControl = require('./src/syscontrol');
   const sys = new SysControl();
+  const extreme = MAC ? null : require('./src/extreme-windows'); // Extreme mode is Windows-only
+  // Dev capture / diagnostic runs never change Windows colours or startup
+  const touchSystem = !process.env.MC_SHOTS && !process.env.MC_DIAG;
 
   let win, tray, settings, ownHwnd = 0;
+  let edgeWin = null, edgeRect = null, edgeHot = false;
   let idle = false, cursorTimer = null, lastCursor = '';
   const stats = new Stats();
   const netmon = new NetMon();
@@ -117,6 +121,28 @@ if (!app.requestSingleInstanceLock()) {
     win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
     win.once('ready-to-show', () => { win.showInactive(); });
     win.on('blur', () => send('win:blur'));
+    // Extreme mode's glow line is a child window opened by the widget's own page, so it shares the
+    // existing renderer process instead of starting a new one.
+    win.webContents.setWindowOpenHandler(({ frameName }) => {
+      if (frameName !== 'mc-edge' || MAC) return { action: 'deny' };
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          // thickFrame: false lifts Windows' ~39 px minimum window height so the line can be 5 px tall
+          frame: false, thickFrame: false, transparent: true, resizable: false, movable: false, minimizable: false, maximizable: false,
+          focusable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, show: false, type: 'toolbar',
+          backgroundColor: '#00000000', webPreferences: { contextIsolation: true, nodeIntegration: false, spellcheck: false },
+        },
+      };
+    });
+    win.webContents.on('did-create-window', (child) => {
+      edgeWin = child;
+      child.setMinimumSize(1, 1);
+      child.setIgnoreMouseEvents(true);
+      child.setAlwaysOnTop(true, 'screen-saver');
+      child.on('closed', () => { if (edgeWin === child) { edgeWin = null; edgeRect = null; edgeHot = false; } });
+      placeEdge();
+    });
     if (process.env.MC_SHOTS) win.webContents.on('console-message', (e) => console.log(`[renderer] ${e.level} ${e.message} (${e.lineNumber})`));
     if (!MAC) ownHwnd = Number(win.getNativeWindowHandle().readBigUInt64LE(0));
     else win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false });
@@ -129,7 +155,15 @@ if (!app.requestSingleInstanceLock()) {
     if (!cursorTimer) cursorTimer = setInterval(() => {
       const p = screen.getCursorScreenPoint();
       const k = `${p.x},${p.y}`;
-      if (k !== lastCursor) { lastCursor = k; send('cursor', p); }
+      if (k !== lastCursor) {
+        lastCursor = k;
+        send('cursor', p);
+        // Extreme mode: light up the glow line while the pointer is on the taskbar
+        if (edgeRect && edgeWin && !edgeWin.isDestroyed()) {
+          const hot = p.x >= edgeRect.x && p.x <= edgeRect.x + edgeRect.width && p.y >= edgeRect.y && p.y <= edgeRect.y + edgeRect.height;
+          if (hot !== edgeHot) { edgeHot = hot; send('edge:hot', hot); if (hot) edgeWin.moveTop(); }
+        }
+      }
     }, 50);
   }
   function stopWork() {
@@ -144,12 +178,14 @@ if (!app.requestSingleInstanceLock()) {
     sys.stop();
     send('idle', true);
     win.hide();
+    if (edgeWin && !edgeWin.isDestroyed()) edgeWin.hide();
     updateTray();
   }
   function exitIdle() {
     if (!idle) return;
     idle = false;
     win.showInactive();
+    placeEdge();
     send('idle', false);
     startWork();
     updateTray();
@@ -183,10 +219,39 @@ if (!app.requestSingleInstanceLock()) {
       { type: 'separator' },
       { label: 'Launch at startup', type: 'checkbox', checked: !!settings.openAtLogin, click: (m) => setSetting('openAtLogin', m.checked) },
       { label: 'Idle when an app is fullscreen', type: 'checkbox', checked: !!settings.idleOnFullscreen, click: (m) => setSetting('idleOnFullscreen', m.checked) },
+      { label: 'Extreme mode (themed taskbar)', type: 'checkbox', visible: !MAC, checked: !!settings.extremeMode, click: (m) => setSetting('extremeMode', m.checked) },
       { label: 'Reload widget', click: () => win.reload() },
       { type: 'separator' },
       { label: 'Quit', click: () => app.quit() },
     ]));
+  }
+
+  // ---- Extreme mode (Windows): native taskbar themed through Windows' accent settings ----
+  async function applyExtreme() {
+    if (!extreme || !touchSystem) return;
+    // After a crash the taskbar is still themed: keep the saved originals rather than backing up our theme
+    const themed = await extreme.isThemed();
+    if (!themed || !settings.extremeBackup) { settings.extremeBackup = await extreme.backup(); Settings.save(settings); }
+    await extreme.apply();
+  }
+  async function disableExtreme() {
+    if (!extreme || !touchSystem) return;
+    await extreme.restore(settings.extremeBackup);
+    settings.extremeBackup = null;
+    Settings.save(settings);
+  }
+  // The glow line sits on the top edge of a bottom taskbar; hidden for other edges or auto-hide
+  function placeEdge() {
+    if (!edgeWin || edgeWin.isDestroyed()) return;
+    const t = extreme && extreme.taskbar();
+    if (!t || t.edge !== 3 || t.autohide || idle) { edgeRect = null; edgeWin.hide(); return; }
+    edgeRect = screen.screenToDipRect(null, { x: t.x, y: t.y, width: t.width, height: t.height });
+    const width = Math.round(edgeRect.width);
+    edgeWin.setBounds({ x: Math.round(edgeRect.x), y: Math.round(edgeRect.y) - 2, width, height: 5 });
+    // Windows may keep a ~39 px minimum height; clip the window to the 5 px strip so nothing else
+    // covers the taskbar or gets composited
+    edgeWin.setShape([{ x: 0, y: 0, width, height: 5 }]);
+    edgeWin.showInactive();
   }
 
   function openMode(mode) {
@@ -201,6 +266,7 @@ if (!app.requestSingleInstanceLock()) {
     settings[key] = value;
     Settings.save(settings);
     if (key === 'openAtLogin') applyLoginItem();
+    if (key === 'extremeMode') { if (value) applyExtreme(); else disableExtreme(); }
     if (key === 'codexFromEditor') {
       codex.reset();
       codex.detect(!!value);
@@ -315,17 +381,19 @@ if (!app.requestSingleInstanceLock()) {
     codex.detect(!!settings.codexFromEditor);
     if (process.env.MC_NO_AI) { claude.exe = null; codex.exe = null; } // dev: preview the no-AI layout
     createWindow();
+    if (settings.extremeMode) applyExtreme();
     // Keep sign-in fast: verify the startup task once things settle. Dev capture runs never touch it,
     // so a test copy can't steal startup from the real install.
-    if (!process.env.MC_SHOTS && !process.env.MC_DIAG) setTimeout(applyLoginItem, 20000);
+    if (touchSystem) setTimeout(applyLoginItem, 20000);
     tray = new Tray(trayIcon());
     tray.on('click', () => openMode('panel'));
     updateTray();
     globalShortcut.register('Control+Alt+M', () => openMode('panel'));
     globalShortcut.register('Control+Alt+Space', () => openMode('chat'));
-    screen.on('display-metrics-changed', place);
-    screen.on('display-added', place);
-    screen.on('display-removed', place);
+    const relayout = () => { place(); placeEdge(); };
+    screen.on('display-metrics-changed', relayout);
+    screen.on('display-added', relayout);
+    screen.on('display-removed', relayout);
     powerMonitor.on('suspend', stopWork);
     powerMonitor.on('resume', () => { if (!idle) startWork(); });
     setInterval(() => { if (!idle) send('user-idle', powerMonitor.getSystemIdleTime()); }, 5000);
@@ -336,6 +404,8 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.MC_DIAG) setInterval(async () => {
       const r = await win.webContents.executeJavaScript("JSON.stringify(document.getAnimations().map(a => (a.animationName || a.transitionProperty) + '@' + (a.effect.target.id || a.effect.target.className)))");
       console.log('[anims]', r);
+      const e = await win.webContents.executeJavaScript("JSON.stringify({ open: !!edge.w, el: !!edge.el(), cls: edge.el() && edge.el().className, anims: edge.w && !edge.w.closed ? edge.w.document.getAnimations().length : null })").catch((x) => x.message);
+      console.log('[edge]', e, edgeWin && !edgeWin.isDestroyed() ? JSON.stringify(edgeWin.getBounds()) : 'no window', JSON.stringify(edgeRect));
     }, 3000);
   });
 
@@ -383,6 +453,11 @@ const MAC = process.platform === 'darwin';
     fs.writeFileSync(path.join(dir, 'done.txt'), 'ok');
   }
 
-  app.on('will-quit', () => { globalShortcut.unregisterAll(); stopWork(); claude.stop(); codex.stop(); sys.stop(); });
+  app.on('will-quit', () => {
+    globalShortcut.unregisterAll(); stopWork(); claude.stop(); codex.stop(); sys.stop();
+    // The taskbar goes back to the user's colours whenever the widget isn't running; the saved
+    // originals stay in settings, and the theme is applied again on the next launch.
+    if (extreme && touchSystem && settings?.extremeMode) extreme.restoreSync(settings.extremeBackup);
+  });
   app.on('window-all-closed', () => app.quit());
 }
