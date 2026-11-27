@@ -1,0 +1,96 @@
+[package]
+name = "mission-control-native"
+version = "1.0.0"
+description = "Mission Control widget: pure Rust edition (native GPU interface, no web view)"
+license = "MIT"
+edition = "2021"
+rust-version = "1.85"
+default-run = "mission-control"
+
+[[bin]]
+name = "mission-control"
+path = "src/main.rs"
+
+[dependencies]
+# The shared backend modules (../rust/src-tauri/src) import `tauri`; this tiny crate provides the three
+# calls they use, so both editions run the same backend code. See host/src/lib.rs.
+tauri = { package = "mc-host", path = "host" }
+
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts"] }
+tray-icon = { version = "0.27", default-features = false }
+global-hotkey = "0.10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+raw-window-handle = "0.6"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "io-util", "net", "sync", "fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "stream", "json"] }
+futures-util = "0.3"
+sysinfo = "0.37"
+dirs = "6"
+regex = "1"
+rand = "0.9"
+chrono = "0.4"
+once_cell = "1"
+url = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Shell",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_HiDpi",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Dwm",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_Networking_WinSock",
+  "Win32_System_SystemInformation",
+  "Win32_System_SystemServices",
+  "Win32_System_Power",
+  "Win32_System_Shutdown",
+  "Win32_System_Threading",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_System_Registry",
+  "Win32_System_ProcessStatus",
+  "Win32_Storage_FileSystem",
+  "Win32_System_LibraryLoader",
+  "Win32_Globalization",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+  "Win32_Devices_Display",
+  "Win32_Devices_FunctionDiscovery",
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_System_Wmi",
+  "Win32_Security",
+  "Devices_Radios",
+  "Devices_Enumeration",
+  "Devices_Bluetooth",
+  "Media_Control",
+  "Foundation",
+  "Foundation_Collections",
+] }
+windows-core = "0.61"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSWindow", "NSView", "NSResponder", "NSApplication", "NSRunningApplication", "NSGraphics", "NSScreen"] }
+winit = "0.30"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+[package.metadata.packager]
+product-name = "Mission Control"
+identifier = "com.missioncontrol.widget.native"
+category = "Utility"
