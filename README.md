@@ -60,7 +60,7 @@ and a built-in AI chat that can control your PC through
 ## Requirements
 
 - **Windows 10 or 11** (x64), or **macOS** (Apple Silicon or Intel). Linux is not supported.
-- On macOS: install Xcode Command Line Tools (`xcode-select --install`) for the Swift helper. See [MACOS.md](MACOS.md) for permissions and platform-specific feature behavior.
+- On macOS: install Xcode Command Line Tools (`xcode-select --install`) for the Swift helper. See the [macOS quick start](#macos-quick-start) below.
 - **Node.js 18+** and npm.
 - **Optional:** an **NVIDIA GPU** with `nvidia-smi` (it ships with the driver) for GPU / VRAM /
   temperature stats. Other GPUs show "No NVIDIA data".
@@ -73,6 +73,11 @@ and a built-in AI chat that can control your PC through
     turn on **Settings → Use Codex from your code editor** (shown only when such a copy exists).
 
 ## Install and run
+
+- [Windows](#windows)
+- [macOS](#macos-quick-start)
+
+### Windows
 
 ```powershell
 git clone https://github.com/Shadhin-f/mission-control-widget.git
@@ -90,7 +95,7 @@ it falls back to a Startup-folder shortcut. You can turn this off in **Settings 
 startup** or from the tray menu. If you move the folder, launch it once from the new place and the
 task updates itself.
 
-### Troubleshooting
+**Windows troubleshooting**
 
 - **`npm start` says Electron failed to install / `electron.exe` is missing.** The Electron
   download sometimes gets skipped. Run:
@@ -105,6 +110,93 @@ task updates itself.
   thumbnails) are skipped. Close the app and clean again. Items tagged **ADMIN** need the widget to
   run as administrator to be cleaned fully.
 
+### macOS quick start
+
+**1. Install the prerequisites** (once):
+
+```bash
+xcode-select --install          # Xcode Command Line Tools: compiles the native Swift helper
+brew install node               # Node.js 18+ (or use the installer from nodejs.org)
+brew install blueutil           # optional: lets the widget switch Bluetooth on/off
+```
+
+**2. Get it and run it:**
+
+```bash
+git clone https://github.com/Shadhin-f/mission-control-widget.git
+cd mission-control-widget
+npm install                     # also builds src/macos/MissionControlHelper.app for your Mac
+npm start
+```
+
+The notch appears at the top-center of your main display, just below the menu bar (and below the
+camera notch on MacBooks that have one). Its icon sits in the **menu bar**; there is no Dock icon.
+
+**3. Allow what you want to use.** macOS asks the first time a feature needs a permission. You can
+also turn these on later in **System Settings → Privacy & Security**:
+
+| Permission | What it unlocks |
+| --- | --- |
+| **Location** | Wi-Fi network names and the list of nearby networks (macOS hides them otherwise) |
+| **Automation** | Dark mode toggle, and now-playing info and controls for Music and Spotify |
+| **Accessibility** | Play/pause/next/previous for other media players (sent as media keys) |
+| **Screen Recording** | Recognising which app is fullscreen, for idle mode |
+| **Full Disk Access** | Cleaning the Safari cache and the Trash |
+| **Bluetooth** | The list of paired Bluetooth devices |
+| Your admin password | Switching Low Power mode on or off (asked each time, never stored) |
+
+When you run from source with `npm start`, the prompt may name your terminal app (Terminal,
+iTerm…) or **Electron** rather than Mission Control: allow whichever app it names. After changing
+Screen Recording or Full Disk Access, quit the widget and start it again. Everything else works
+without these; a feature whose permission is missing shows as unavailable instead of failing.
+
+**4. Optional: build a standalone app** you can keep in Applications:
+
+```bash
+npm run package:mac             # creates dist/Mission Control.app (ad-hoc signed)
+```
+
+Drag `dist/Mission Control.app` into **Applications** and open it. To rebuild, delete
+`dist/Mission Control.app` first. The app isn't notarized: if you copy it to another Mac and macOS
+blocks it, Control-click it and choose **Open**, or click **Open Anyway** in
+**System Settings → Privacy & Security**.
+
+**Shortcuts on a Mac** use the **Control** key, not Command: **Control+Option+M** opens Mission
+Control and **Control+Option+Space** opens the AI chat.
+
+**Launch at startup on macOS:** running from source adds
+`~/Library/LaunchAgents/com.missioncontrol.widget.plist`, so it starts at your next login. The
+packaged app adds itself to **System Settings → General → Login Items** instead. Either way,
+**Settings → Launch at startup** turns it off. If you move the folder, start it once from the new
+place.
+
+**Mac troubleshooting**
+
+- **`npm install` fails with an `xcrun` or `swiftc` error.** The Xcode Command Line Tools are
+  missing or out of date. Run `xcode-select --install`, then `npm run postinstall` to build the
+  helper again.
+- **Wi-Fi names are blank.** Allow **Location** for the app the prompt named (see step 3).
+- **The Bluetooth switch does nothing.** Install `blueutil` with `brew install blueutil`.
+- **No brightness slider for an external monitor.** macOS only exposes brightness for built-in
+  and Apple displays; use the monitor's own buttons.
+- **GPU temperature, power or fan show `--`.** macOS doesn't expose them without extra privileges.
+  The widget shows `--` rather than guessing.
+
+See [MACOS.md](MACOS.md) for how each feature works on macOS.
+
+### Uninstall
+
+1. Open **Settings → Launch at startup** and turn it off. This removes the startup task (Windows),
+   or the LaunchAgent / Login Item (macOS).
+2. Quit the widget from **Settings → Quit** or the tray / menu-bar icon.
+3. Delete the project folder (and `Mission Control.app` from Applications if you built it).
+
+If you already deleted the folder without step 1, remove the startup entry by hand:
+
+- **Windows:** delete the **Mission Control** task in Task Scheduler.
+- **macOS:** run `rm ~/Library/LaunchAgents/com.missioncontrol.widget.plist`, or remove it from
+  **Login Items** if you used the packaged app.
+
 ### Pet-only idle layout
 
 In **Settings**, enable **Show sides only on hover** to keep only the pet visible while collapsed. Hover over the pet to reveal the stats and quick actions on either side. Move away to hide them again, or click the pet to open Mission Control. The preference is saved across launches and works on Windows and macOS. It is off by default, preserving the existing layout. Fullscreen visibility continues to follow **Idle during fullscreen**.
@@ -113,8 +205,8 @@ In **Settings**, enable **Show sides only on hover** to keep only the pet visibl
 
 | Action | How |
 | --- | --- |
-| Open Mission Control | Click the pet, press `Ctrl+Alt+M`, or click the tray icon |
-| Ask Claude | Right-click the pet, press `Ctrl+Alt+Space`, or hover the notch and click **Ask Claude** |
+| Open Mission Control | Click the pet, press `Ctrl+Alt+M` (Mac: `Control+Option+M`), or click the tray / menu-bar icon |
+| Ask Claude | Right-click the pet, press `Ctrl+Alt+Space` (Mac: `Control+Option+Space`), or hover the notch and click **Ask Claude** |
 | Collapse | `Esc`, the ˄ button, or click anywhere else (use the pin button to keep it open) |
 | Refresh Claude limits | Click the Claude usage chip on the right of the notch |
 | Change volume from anywhere | Scroll over the pet |

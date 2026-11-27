@@ -1,6 +1,10 @@
 # macOS support
 
-This fork supports macOS on Apple Silicon and Intel, alongside the original Windows backend.
+Mission Control supports macOS on Apple Silicon and Intel, alongside the Windows backend.
+
+For step-by-step setup, permissions, packaging and uninstalling, see the
+[macOS quick start in the README](README.md#macos-quick-start). This page covers how each feature
+is implemented on macOS.
 
 ## Development
 
@@ -34,4 +38,4 @@ Install Node.js 18+ and Xcode Command Line Tools (`xcode-select --install`). Run
 
 GPU temperature, GPU power and fan readings are unavailable when macOS does not expose them without privileges; the UI does not invent numbers. Some devices do not expose hardware volume/mute or brightness. An unsigned/local app may need permission in System Settings → Privacy & Security (Automation, Accessibility, Screen Recording, Full Disk Access or Location). Denied access is surfaced as an error or unavailable data. No permissions are bypassed.
 
-The DisplayServices brightness API and IOAccelerator performance fields are Apple implementation details and may change between macOS releases. This local build is ad-hoc signed, not notarized for public distribution. Windows code is preserved in `src/*-windows.js`; Windows execution still needs validation on a Windows machine.
+The DisplayServices brightness API and IOAccelerator performance fields are Apple implementation details and may change between macOS releases. This local build is ad-hoc signed, not notarized for public distribution. Windows code lives in `src/*-windows.js` and has been tested on Windows 11 after the macOS changes.
