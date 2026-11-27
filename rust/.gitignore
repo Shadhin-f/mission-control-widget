@@ -1,0 +1,5 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+# Built by build.rs on macOS from ../src/macos/Helper.swift
+src-tauri/helper/

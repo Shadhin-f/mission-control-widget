@@ -2,6 +2,9 @@
 
 **macOS support:** The macOS backend is implemented in `src/macos`. See [MACOS.md](MACOS.md) for setup, feature coverage and permission requirements.
 
+**Rust edition:** [`rust/`](rust/README.md) holds a Tauri build with the backend rewritten in Rust. It runs the same
+interface and features in a 5 MB app instead of Electron's ~300 MB.
+
 A futuristic system widget for Windows and macOS that hangs from the top-center of your screen like a notch,
 with an animated robot pet, live PC stats, device controls, internet speed tests, a cache cleaner,
 and a built-in AI chat that can control your PC through
