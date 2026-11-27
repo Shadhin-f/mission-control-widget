@@ -27,7 +27,7 @@ class Stats extends EventEmitter {
       cpuModel: (os.cpus()[0]?.model || 'CPU').replace(/\s+/g, ' ').trim(),
       cores: os.cpus().length,
       host: os.hostname(),
-      os: `Windows ${os.release()}`,
+      os: `${process.platform === 'darwin' ? 'macOS' : 'Windows'} ${os.release()}`,
       totalMem: os.totalmem(),
     };
   }
@@ -39,10 +39,29 @@ class Stats extends EventEmitter {
     this.readDisks();
     this.diskTimer = setInterval(() => this.readDisks(), 15000);
     this.startGpu();
+    if (process.platform === 'darwin') {
+      const { helper, run } = require('./macos/run');
+      run('/usr/bin/sw_vers', ['-productVersion']).then(v => { this.static.os = `macOS ${v}`; }).catch(() => {});
+      helper('gpu').then(g => { this.gpu = { name: g.name, unified: g.unified, util: null, vramUsed: null, vramTotal: null, temp: null, power: null }; }).catch(() => {});
+      const read = async () => {
+        if (this.macReading) return; this.macReading = true;
+        try {
+          const text = await run('/usr/sbin/ioreg', ['-r', '-c', 'IOAccelerator', '-l']);
+          const match = text.match(/"Device Utilization %"\s*=\s*(\d+)/);
+          if (this.gpu) this.gpu.util = match ? Number(match[1]) : null;
+          const vm = await run('/usr/bin/vm_stat');
+          const page = Number(vm.match(/page size of (\d+)/)?.[1]) || 16384;
+          const n = key => Number(vm.match(new RegExp(key + ':\\s+(\\d+)'))?.[1]) || 0;
+          this.macFree = (n('Pages free') + n('Pages inactive') + n('Pages speculative')) * page;
+        } catch {} finally { this.macReading = false; }
+      };
+      read(); this.macTimer = setInterval(read, 5000);
+    }
     this.timer = setInterval(() => this.tick(), 1000);
   }
 
   stop() {
+    clearInterval(this.macTimer);
     clearInterval(this.timer); this.timer = null;
     clearInterval(this.diskTimer); this.diskTimer = null;
     if (this.gpuProc) { this.gpuProc.kill(); this.gpuProc = null; }
@@ -82,6 +101,11 @@ class Stats extends EventEmitter {
         out.push({ drive: root.slice(0, 2), total, free: s.bavail * s.bsize });
       } catch {}
     }
+    if (process.platform === 'darwin') {
+      const roots = ['/'];
+      try { roots.push(...fs.readdirSync('/Volumes').map(n => require('path').join('/Volumes', n)).filter(p => !fs.lstatSync(p).isSymbolicLink() && !['Recovery','Preboot','VM','Update'].includes(require('path').basename(p)))); } catch {}
+      for (const root of roots) { try { const s = fs.statfsSync(root); if (s.blocks) out.push({ drive: root, total: s.blocks*s.bsize, free: s.bavail*s.bsize }); } catch {} }
+    }
     this.disks = out;
   }
 
@@ -106,7 +130,7 @@ class Stats extends EventEmitter {
     }
     if (n) { this.prevNet = { ...n, t: now }; this.adapter = n.adapter; }
 
-    const total = os.totalmem(), free = os.freemem();
+    const total = os.totalmem(), free = this.macFree ?? os.freemem();
     this.emit('stats', {
       t: now,
       cpu, cores, cpuMhz: cpus[0]?.speed || 0,

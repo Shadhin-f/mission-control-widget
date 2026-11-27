@@ -1,3 +1,4 @@
+const { findUnixCli, stopTree } = require('./cli-platform');
 // Bridge to the OpenAI Codex CLI (uses your existing Codex / ChatGPT sign-in).
 // Chat: `codex exec --json` (and `codex exec resume <thread>` for follow-ups).
 // Limits: `codex app-server` JSON-RPC `account/rateLimits/read`, which costs no usage.
@@ -8,8 +9,8 @@ const os = require('os');
 const path = require('path');
 
 const PREAMBLE = [
-  "[Context: you are the assistant inside the user's \"Mission Control\" desktop widget on their Windows 11 PC.",
-  'The user controls the PC through you: opening apps and folders, managing files, checking and changing system state. Use PowerShell.',
+  `[Context: you are the assistant inside the user's \"Mission Control\" desktop widget on their ${process.platform === 'darwin' ? 'macOS Mac' : 'Windows 11 PC'}.`,
+  process.platform === 'darwin' ? 'Use macOS shell commands and AppleScript for system actions. Open apps with open -a.' : 'The user controls the PC through you: opening apps and folders, managing files, checking and changing system state. Use PowerShell.',
   'The chat window is small: answer in a few short sentences.',
   'Before anything destructive or hard to undo, say exactly what you will do and wait for the user to confirm.]',
   '',
@@ -30,6 +31,7 @@ function findExeIn(dir, depth = 5) {
 
 // A real Codex CLI install: PATH (npm, WinGet, Scoop, standalone installer), or npm's global folder.
 function findCodexCli() {
+  if (process.platform !== 'win32') return findUnixCli('codex');
   for (const dir of (process.env.PATH || '').split(';')) {
     if (!dir) continue;
     const exe = path.join(dir, 'codex.exe');
@@ -63,7 +65,7 @@ function findEditorCodex() {
     let dirs = [];
     try { dirs = fs.readdirSync(root).filter((d) => /^openai\.chatgpt-/.test(d)); } catch { continue; }
     dirs.sort((a, b) => { const x = verKey(a), y = verKey(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; });
-    for (const d of dirs) { const p = path.join(root, d, 'bin', 'windows-x86_64', 'codex.exe'); if (fs.existsSync(p)) return p; }
+    for (const d of dirs) { const p = path.join(root, d, 'bin', process.platform === 'darwin' ? `darwin-${process.arch === 'arm64' ? 'aarch64' : 'x86_64'}` : 'windows-x86_64', process.platform === 'darwin' ? 'codex' : 'codex.exe'); if (fs.existsSync(p)) return p; }
   }
   return null;
 }
@@ -174,7 +176,7 @@ class CodexBridge extends EventEmitter {
     args.push('--json', '--skip-git-repo-check', '-c', `sandbox_mode=${mode === 'plan' ? 'read-only' : 'workspace-write'}`);
     if (this.model) args.push('-m', this.model);
     args.push('-');
-    const child = spawn(this.exe, args, { cwd: os.homedir(), windowsHide: true, shell: this.exe.endsWith('.cmd') });
+    const child = spawn(this.exe, args, { cwd: os.homedir(), detached: process.platform !== 'win32', windowsHide: true, shell: this.exe.endsWith('.cmd') });
     this.child = child;
     this.emit('event', { kind: 'start' });
     const started = Date.now();
@@ -231,7 +233,7 @@ class CodexBridge extends EventEmitter {
   stop() {
     if (!this.child) return;
     this.stopped = true;
-    execFile('taskkill', ['/PID', String(this.child.pid), '/T', '/F'], { windowsHide: true }, () => {});
+    stopTree(this.child);
   }
 
   reset() { this.stop(); this.threadId = null; }

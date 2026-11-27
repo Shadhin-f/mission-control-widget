@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, globalShortcut, powerMonitor, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const MAC = process.platform === 'darwin';
 const { execFile } = require('child_process');
 
 const W = 800, H = 700;
@@ -55,6 +56,19 @@ if (!app.requestSingleInstanceLock()) {
   function removeShortcut() { try { const l = startupLnk(); if (fs.existsSync(l)) fs.unlinkSync(l); } catch {} }
   async function applyLoginItem() {
     const appDir = path.resolve(app.getAppPath());
+    if (MAC) {
+      if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: !!settings.openAtLogin });
+      else {
+        const { execFileSync } = require('child_process');
+        const file = path.join(app.getPath('home'), 'Library', 'LaunchAgents', 'com.missioncontrol.widget.plist');
+        if (!settings.openAtLogin) { try { fs.unlinkSync(file); } catch {} return; }
+        const xml = v => String(v).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&apos;' }[c]));
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>com.missioncontrol.widget</string><key>ProgramArguments</key><array><string>${xml(process.execPath)}</string><string>${xml(appDir)}</string></array><key>RunAtLoad</key><true/><key>WorkingDirectory</key><string>${xml(appDir)}</string><key>EnvironmentVariables</key><dict><key>PATH</key><string>${xml(process.env.PATH || '/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin')}</string></dict></dict></plist>`);
+        execFileSync('/usr/bin/plutil', ['-lint', file]);
+      }
+      return;
+    }
     const args = app.isPackaged ? '' : `"${appDir}"`;
     // Remove the Run-key entry older versions created (Windows skips long Run commands anyway)
     app.setLoginItemSettings({ openAtLogin: false, name: 'Mission Control', path: process.execPath, args: app.isPackaged ? [] : [appDir] });
@@ -104,7 +118,8 @@ if (!app.requestSingleInstanceLock()) {
     win.once('ready-to-show', () => { win.showInactive(); });
     win.on('blur', () => send('win:blur'));
     if (process.env.MC_SHOTS) win.webContents.on('console-message', (e) => console.log(`[renderer] ${e.level} ${e.message} (${e.lineNumber})`));
-    ownHwnd = Number(win.getNativeWindowHandle().readBigUInt64LE(0));
+    if (!MAC) ownHwnd = Number(win.getNativeWindowHandle().readBigUInt64LE(0));
+    else win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: false });
   }
 
   // ---- Idle mode: hide + stop all sampling while a fullscreen app is in front ----
@@ -196,7 +211,7 @@ if (!app.requestSingleInstanceLock()) {
     send('settings', publicSettings());
     updateTray();
   }
-  const publicSettings = () => ({ ...settings, claudeFound: !!claude.exe, ai: aiAvailable(), codexEditorAvailable: !!codex.editorExe });
+  const publicSettings = () => ({ ...settings, claudeFound: !!claude.exe, ai: aiAvailable(), codexEditorAvailable: !!codex.editorExe, platform: process.platform });
 
   // ---- IPC ----
   ipcMain.on('mouse:interactive', (_e, on) => { if (win) win.setIgnoreMouseEvents(!on, { forward: true }); });
@@ -234,6 +249,9 @@ if (!app.requestSingleInstanceLock()) {
     location: 'ms-settings:privacy-location', devices: 'ms-settings:connecteddevices',
     nightlight: 'ms-settings:nightlight', notifications: 'ms-settings:notifications',
   };
+  if (MAC) Object.assign(SETTINGS_PAGES, Object.fromEntries(Object.entries({
+    bluetooth: 'com.apple.BluetoothSettings', wifi: 'com.apple.wifi-settings-extension', network: 'com.apple.Network-Settings.extension', sound: 'com.apple.Sound-Settings.extension', display: 'com.apple.Displays-Settings.extension', power: 'com.apple.Battery-Settings.extension', location: 'com.apple.preference.security?Privacy_LocationServices', devices: 'com.apple.BluetoothSettings', nightlight: 'com.apple.Displays-Settings.extension', notifications: 'com.apple.Notifications-Settings.extension',
+  }).map(([k,v]) => [k, `x-apple.systempreferences:${v}`])));
   ipcMain.handle('sys:helper', (_e, cmd, args) => sys.helper(String(cmd), args || {}));
   ipcMain.handle('sys:wifi', () => sys.wifi());
   ipcMain.handle('sys:wifiConnect', (_e, ssid) => sys.wifiConnect(String(ssid)));
@@ -280,7 +298,7 @@ if (!app.requestSingleInstanceLock()) {
   const windowOpen = () => (settings.claudeLimits?.fiveHour?.resetsAt || 0) > Date.now();
   function autoProbe() {
     if (idle) return;
-    if (claude.exe && settings.autoLimits && !claude.busy && (!settings.claudeLimits || windowOpen())) claude.probeLimits();
+    if (claude.exe && settings.autoLimits && !claude.busy && windowOpen()) claude.probeLimits();
   }
   setInterval(autoProbe, 10 * 60 * 1000);
   setInterval(refreshCodexLimits, 5 * 60 * 1000);
@@ -290,7 +308,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => openMode('panel'));
 
   app.whenReady().then(() => {
-    app.setAppUserModelId('com.missioncontrol.widget');
+    if (!MAC) app.setAppUserModelId('com.missioncontrol.widget');
+    else app.dock.hide();
     settings = Settings.load();
     // A real Codex CLI always counts; the copy bundled with an editor extension only when opted in
     codex.detect(!!settings.codexFromEditor);
@@ -323,6 +342,7 @@ if (!app.requestSingleInstanceLock()) {
   // Dev only: MC_SHOTS=<dir> renders each view to PNG (no effect in normal use).
   async function devShots(dir) {
     const fs = require('fs');
+const MAC = process.platform === 'darwin';
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const js = (code) => win.webContents.executeJavaScript(code);
     const shot = async (name) => { const img = await win.webContents.capturePage(); fs.writeFileSync(path.join(dir, `${name}.png`), img.toPNG()); };
@@ -358,6 +378,8 @@ if (!app.requestSingleInstanceLock()) {
       await js(`document.getElementById('chat-in').value = ${JSON.stringify(process.env.MC_CHAT)}; document.getElementById('chat-send').click()`);
       await wait(Number(process.env.MC_CHAT_WAIT || 25000)); await shot('6-chat-reply');
     }
+    const smoke = await js(`(async () => ({ stats: { cpu: state.stats?.cpu, gpu: state.stats?.gpu, diskCount: state.stats?.disks?.length }, settings: await mc.getSettings(), audio: await mc.sys('state'), processes: (await mc.listProcs()).total }))()` ).catch(e => ({ error: e.message }));
+    fs.writeFileSync(path.join(dir, 'smoke.json'), JSON.stringify(smoke, null, 2));
     fs.writeFileSync(path.join(dir, 'done.txt'), 'ok');
   }
 

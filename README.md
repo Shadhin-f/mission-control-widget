@@ -1,6 +1,8 @@
 # Mission Control
 
-A futuristic system widget for Windows that hangs from the top-center of your screen like a notch,
+**macOS support:** The macOS backend is implemented in `src/macos`. See [MACOS.md](MACOS.md) for setup, feature coverage and permission requirements.
+
+A futuristic system widget for Windows and macOS that hangs from the top-center of your screen like a notch,
 with an animated robot pet, live PC stats, device controls, internet speed tests, a cache cleaner,
 and a built-in AI chat that can control your PC through
 [Claude Code](https://claude.com/claude-code) or the OpenAI Codex CLI, whichever you have.
@@ -57,7 +59,8 @@ and a built-in AI chat that can control your PC through
 
 ## Requirements
 
-- **Windows 10 or 11** (x64). The widget uses Win32 APIs, so it does not run on macOS or Linux.
+- **Windows 10 or 11** (x64), or **macOS** (Apple Silicon or Intel). Linux is not supported.
+- On macOS: install Xcode Command Line Tools (`xcode-select --install`) for the Swift helper. See [MACOS.md](MACOS.md) for permissions and platform-specific feature behavior.
 - **Node.js 18+** and npm.
 - **Optional:** an **NVIDIA GPU** with `nvidia-smi` (it ships with the driver) for GPU / VRAM /
   temperature stats. Other GPUs show "No NVIDIA data".

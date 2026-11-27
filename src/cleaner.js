@@ -31,7 +31,7 @@ function firefoxPaths() {
 
 const TWO_HOURS = 2 * 3600 * 1000;
 
-const CATEGORIES = [
+const WINDOWS_CATEGORIES = [
   { id: 'usertemp', name: 'User temp files', desc: 'Leftovers from installers and apps', paths: () => [os.tmpdir()], minAge: TWO_HOURS },
   { id: 'wintemp', name: 'Windows temp', desc: 'System temp folder (some files need admin)', paths: () => [path.join(WIN, 'Temp')], minAge: TWO_HOURS, admin: true },
   { id: 'chrome', name: 'Chrome cache', desc: 'Web, code and GPU caches', paths: () => chromiumPaths(path.join(L, 'Google', 'Chrome', 'User Data')), proc: 'chrome.exe' },
@@ -46,6 +46,20 @@ const CATEGORIES = [
   { id: 'wupdate', name: 'Windows Update downloads', desc: 'Already-installed update files (needs admin)', paths: () => [path.join(WIN, 'SoftwareDistribution', 'Download')], admin: true },
   { id: 'recycle', name: 'Recycle Bin', desc: 'Everything in the Recycle Bin on all drives', special: 'recycle' },
 ];
+
+const H = os.homedir(), MC = path.join(H, 'Library', 'Caches');
+const appSupport = path.join(H, 'Library', 'Application Support');
+const existing = (...paths) => paths.filter(p => fs.existsSync(p));
+const CATEGORIES = process.platform === 'darwin' ? [
+  { id: 'usertemp', name: 'User temporary files', desc: 'Files older than two hours; recent files are retained', paths: () => [os.tmpdir()], minAge: TWO_HOURS },
+  ...[['chrome','Chrome','Google/Chrome','google chrome'], ['edge','Edge','Microsoft Edge','microsoft edge'], ['brave','Brave','BraveSoftware/Brave-Browser','brave browser']].map(([id,name,dir,proc]) => ({ id, name: name + ' cache', desc: 'Web, code and GPU caches', paths: () => [...chromiumPaths(path.join(appSupport,dir)), ...existing(path.join(MC,dir))], proc })),
+  { id: 'firefox', name: 'Firefox cache', desc: 'Browser cache only', paths: () => existing(path.join(MC,'Firefox')), proc: 'firefox' },
+  { id: 'safari', name: 'Safari cache', desc: 'Requires Full Disk Access on some macOS versions', paths: () => existing(path.join(MC,'com.apple.Safari'),path.join(H,'Library/Containers/com.apple.Safari/Data/Library/Caches/com.apple.Safari')), proc: 'safari' },
+  { id: 'shader', name: 'GPU shader cache', desc: 'Metal caches rebuilt on demand', paths: () => existing(path.join(MC,'com.apple.metal')) },
+  { id: 'crash', name: 'User crash reports', desc: 'DiagnosticReports for this user', paths: () => existing(path.join(H,'Library/Logs/DiagnosticReports')) },
+  { id: 'devcache', name: 'npm / pip caches', desc: 'Package download caches', paths: () => existing(path.join(H,'.npm/_cacache'),path.join(MC,'pip')) },
+  { id: 'recycle', name: 'Trash', desc: 'This user’s Trash; macOS may require Full Disk Access', special: 'recycle' },
+] : WINDOWS_CATEGORIES;
 
 async function dirSize(p, limit = { files: 0 }) {
   let size = 0, files = 0;
@@ -72,6 +86,21 @@ async function entriesOf(cat, p) {
   return names.map((n) => path.join(p, n));
 }
 
+async function agedFiles(root, minAge, remove = false) {
+  let size = 0, files = 0;
+  let s; try { s = await fsp.lstat(root); } catch { return { size, files }; }
+  if (s.isSymbolicLink()) return { size, files };
+  if (s.isDirectory()) {
+    let names; try { names = await fsp.readdir(root); } catch { return { size, files }; }
+    for (const name of names) { const r = await agedFiles(path.join(root,name), minAge,remove); size += r.size; files += r.files; }
+    if (remove) { try { await fsp.rmdir(root); } catch {} }
+  } else if (Date.now()-s.mtimeMs >= minAge) {
+    size = s.size; files = 1;
+    if (remove) { try { await fsp.unlink(root); } catch {} }
+  }
+  return { size, files };
+}
+
 async function scanCategory(cat) {
   if (cat.special === 'recycle') {
     const r = native.recycleBinInfo();
@@ -82,7 +111,8 @@ async function scanCategory(cat) {
     for (const e of await entriesOf(cat, p)) {
       let st;
       try { st = await fsp.lstat(e); } catch { continue; }
-      if (cat.minAge && Date.now() - st.mtimeMs < cat.minAge) continue;
+      if (st.isSymbolicLink()) continue;
+      if (cat.minAge) { const d = await agedFiles(e, cat.minAge); size += d.size; files += d.files; continue; }
       if (st.isDirectory()) { const d = await dirSize(e); size += d.size; files += d.files; } else { size += st.size; files++; }
     }
   }
@@ -114,7 +144,7 @@ async function clean(ids, onProgress) {
       for (const p of cat.paths()) {
         for (const e of await entriesOf(cat, p)) {
           try {
-            if (cat.minAge) { const st = await fsp.lstat(e); if (Date.now() - st.mtimeMs < cat.minAge) continue; }
+            if (cat.minAge) { await agedFiles(e, cat.minAge, true); continue; }
             await fsp.rm(e, { recursive: true, force: true, maxRetries: 0 });
           } catch {} // locked / access denied: skip
         }
@@ -126,4 +156,4 @@ async function clean(ids, onProgress) {
   return results;
 }
 
-module.exports = { scan, clean };
+module.exports = { scan, clean, agedFiles };
