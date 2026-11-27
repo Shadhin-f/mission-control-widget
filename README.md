@@ -105,6 +105,10 @@ task updates itself.
   thumbnails) are skipped. Close the app and clean again. Items tagged **ADMIN** need the widget to
   run as administrator to be cleaned fully.
 
+### Pet-only idle layout
+
+In **Settings**, enable **Show sides only on hover** to keep only the pet visible while collapsed. Hover over the pet to reveal the stats and quick actions on either side. Move away to hide them again, or click the pet to open Mission Control. The preference is saved across launches and works on Windows and macOS. It is off by default, preserving the existing layout. Fullscreen visibility continues to follow **Idle during fullscreen**.
+
 ## Using it
 
 | Action | How |

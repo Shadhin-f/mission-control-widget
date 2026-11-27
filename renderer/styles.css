@@ -40,7 +40,7 @@ button { cursor: pointer; background: none; border: 0; }
   border: 1px solid var(--line-2); border-top: 0;
   box-shadow: 0 10px 40px rgba(0, 0, 0, .55), inset 0 -1px 0 rgba(62, 243, 255, .08);
   overflow: hidden;
-  transition: width .62s var(--spring), height .62s var(--spring), border-radius .5s var(--ease), box-shadow .4s;
+  transition: width .62s var(--spring), height .62s var(--spring), border-radius .5s var(--ease), box-shadow .4s, opacity .2s var(--ease);
   will-change: width, height;
 }
 #shell::after { /* glowing bottom rim */
@@ -131,6 +131,16 @@ body.no-ai #shell.hover:not(.mode-panel):not(.mode-chat) ~ #pet { translate: 175
 .chip.crit .v { color: var(--red); }
 .chip.crit .meter b { --c: var(--red); }
 .chip.warn .meter b { --c: var(--amber); }
+
+/* Optional pet-only idle layout. Hidden sides never intercept clicks in apps below. */
+body.pet-only #shell:not(.mode-panel):not(.mode-chat):not(.hover) {
+  width: 64px;
+  opacity: 0;
+  pointer-events: none;
+}
+/* Keep the hover target centered even when no AI CLI is installed. */
+body.pet-only.no-ai #shell:not(.mode-panel):not(.mode-chat) ~ #pet { translate: 0 0; }
+body.pet-only.no-ai #shell:not(.mode-panel):not(.mode-chat) #bar { grid-template-columns: 1fr 62px 1fr; }
 
 /* ---- quick actions (hover reveal) ---- */
 #quick { position: absolute; top: 52px; left: 0; right: 0; display: flex; justify-content: center; gap: 10px; opacity: 0; transform: translateY(-8px); transition: opacity .25s, transform .4s var(--spring); pointer-events: none; }

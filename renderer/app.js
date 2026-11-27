@@ -640,6 +640,7 @@ $('#cf-ok').addEventListener('click', async () => {
 // ---------------- settings ----------------
 function applySettings(s) {
   state.settings = s;
+  document.body.classList.toggle('pet-only', !!s.hideSidesUntilHover);
   $$('[data-set]').forEach((el) => { if (el.type === 'checkbox') el.checked = !!s[el.dataset.set]; else el.value = s[el.dataset.set]; });
   $('#chat-mode').value = s.chatMode || 'auto';
   applyAi();

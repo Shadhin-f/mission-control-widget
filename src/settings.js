@@ -7,6 +7,7 @@ const DEFAULTS = {
   idleOnFullscreen: true,
   chatMode: 'auto',
   collapseOnBlur: true,
+  hideSidesUntilHover: false,
   autoLimits: true,
   claudeLimits: null,
   codexLimits: null,
