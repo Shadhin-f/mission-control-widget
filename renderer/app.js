@@ -81,7 +81,7 @@ async function setMode(m) {
   if (m !== 'collapsed') { mc.focus(); hideBubble(); }
   if (m === 'chat') setTimeout(() => $('#chat-in').focus(), 350);
   if (m === 'panel') { onTab(state.tab); requestAnimationFrame(moveInk); }
-  if (m !== 'panel') stopAppsPolling();
+  if (m !== 'panel') { stopAppsPolling(); controls.stop(); }
   pet.refresh();
   loop.kick();
 }
@@ -92,7 +92,11 @@ document.addEventListener('click', (e) => {
 $('#pet').addEventListener('click', () => setMode(state.mode === 'collapsed' ? 'panel' : 'collapsed'));
 $('#pet').addEventListener('contextmenu', (e) => { e.preventDefault(); setMode(state.mode === 'chat' ? 'collapsed' : 'chat'); });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { if ($('#cl-confirm').classList.contains('show')) closeConfirm(); else setMode('collapsed'); }
+  if (e.key === 'Escape') {
+    if ($('#cl-confirm').classList.contains('show')) closeConfirm();
+    else if (controls.drawer) controls.closeDrawer();
+    else setMode('collapsed');
+  }
 });
 mc.onBlur(() => { if (state.settings.collapseOnBlur && !state.pinned && !$('#cl-confirm').classList.contains('show')) setMode('collapsed'); });
 mc.onOpen((m) => setMode(m));
@@ -105,7 +109,7 @@ function moveInk() {
   ink.style.width = `${t.offsetWidth - 20}px`;
   ink.style.transform = `translateX(${t.offsetLeft + 10}px)`;
 }
-const TAB_ORDER = ['overview', 'network', 'apps', 'cleaner', 'settings'];
+const TAB_ORDER = ['overview', 'controls', 'network', 'apps', 'cleaner', 'settings'];
 $$('.tab').forEach((t) => t.addEventListener('click', () => {
   const prev = state.tab;
   state.tab = t.dataset.tab;
@@ -121,6 +125,7 @@ $$('.tab').forEach((t) => t.addEventListener('click', () => {
 }));
 function onTab(tab) {
   if (tab === 'apps') startAppsPolling(); else stopAppsPolling();
+  if (tab === 'controls') controls.start(); else controls.stop();
   if (tab === 'cleaner' && !cleanerState.scanned && !cleanerState.busy) scanCache();
   loop.kick();
 }
@@ -746,6 +751,363 @@ $('#chat-new').addEventListener('click', () => {
   setBusy(false);
 });
 $('.sugs').addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON') sendChat(e.target.textContent); });
+
+// ---------------- system controls (Controls tab) ----------------
+const ICONS = {
+  speaker: '<svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>',
+  mic: '<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg>',
+  headphones: '<svg viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3.5" y="14" width="4" height="6.5" rx="1.5"/><rect x="16.5" y="14" width="4" height="6.5" rx="1.5"/></svg>',
+  phone: '<svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>',
+  keyboard: '<svg viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="19" height="11" rx="2"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7.5 14h9"/></svg>',
+  bt: '<svg viewBox="0 0 24 24"><path d="M7 7l10 10-5 4.5V2.5L17 7 7 17"/></svg>',
+  wifi: '<svg viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.6 16a5 5 0 0 1 6.8 0M12 19.2h.01"/></svg>',
+  lock: '<svg viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/></svg>',
+};
+const shortName = (n) => (n || '').replace(/\s*\(.*\)\s*$/, '') || n || 'Device';
+const SETTINGS_FOR = { wifi: 'wifi', bt: 'bluetooth', out: 'sound', in: 'sound' };
+
+const controls = {
+  active: false, timers: [], st: null, bt: null, wifi: null, mons: [], plans: [],
+  inflight: false, dragging: null, drawer: null, drawerSig: '', hold: 0,
+
+  start() {
+    if (this.active) return;
+    this.active = true;
+    this.refresh(); this.refreshBt(); this.refreshWifi(); this.refreshBrightness(); this.refreshPlans();
+    this.timers = [
+      setInterval(() => this.refresh(), 1500),
+      setInterval(() => this.refreshBt(), 8000),
+      setInterval(() => this.refreshWifi(), 10000),
+      setInterval(() => this.refreshBrightness(), 30000),
+    ];
+    requestAnimationFrame(() => this.measure());
+  },
+  stop() { this.active = false; this.timers.forEach(clearInterval); this.timers = []; },
+
+  async refresh() {
+    if (this.inflight || Date.now() < this.hold) return;
+    this.inflight = true;
+    try { this.st = await mc.sys('state'); this.render(); } catch (e) { this.fail(e); } finally { this.inflight = false; }
+  },
+  async refreshBt() { try { this.bt = (await mc.sys('bt')).devices || []; this.render(); } catch {} },
+  async refreshWifi() { try { this.wifi = await mc.wifi(); this.render(); } catch {} },
+  async refreshBrightness() { try { this.mons = (await mc.sys('brightness')).monitors || []; this.renderBrightness(); } catch { this.mons = []; this.renderBrightness(); } },
+  async refreshPlans() { try { this.plans = await mc.powerPlans(); this.renderPlans(); } catch {} },
+  fail(e) { const s = $('#t-sound small'); if (s && !this.st) s.textContent = 'Unavailable'; console.warn(e); },
+
+  out() { const l = this.st?.audio?.out || []; return l.find((d) => d.isDefault) || l[0]; },
+  inp() { const l = this.st?.audio?.in || []; return l.find((d) => d.isDefault) || l[0]; },
+  radio(kind) { return (this.st?.radios || []).find((r) => r.kind === kind); },
+
+  tile(id, on, sub, extra = {}) {
+    const t = $(id);
+    t.classList.toggle('on', !!on);
+    for (const [k, v] of Object.entries(extra)) t.classList.toggle(k, !!v);
+    t.querySelector('small').textContent = sub;
+  },
+
+  render() {
+    const st = this.st;
+    if (!st) return;
+    // Sound + volume
+    const o = this.out();
+    if (o) {
+      this.tile('#t-sound', !o.muted, o.muted ? 'Muted' : `${o.volume}% · ${shortName(o.name)}`, { muted: o.muted });
+      this.setRange('vol', o.volume / 100, o.muted);
+      $('#sl-vol .sl-name span').textContent = shortName(o.name);
+      $('#sl-vol .sl-v').textContent = o.muted ? 'Muted' : `${o.volume}%`;
+    } else this.tile('#t-sound', false, 'No output device');
+    // Mic
+    const i = this.inp();
+    if (i) {
+      this.tile('#t-mic', !i.muted, i.muted ? 'Muted' : `On · ${i.volume}%`, { muted: i.muted });
+      this.setRange('mic', i.volume / 100, i.muted);
+      $('#sl-mic .sl-name span').textContent = shortName(i.name);
+      $('#sl-mic .sl-v').textContent = i.muted ? 'Muted' : `${i.volume}%`;
+    } else this.tile('#t-mic', false, 'No microphone');
+    // Radios
+    const wifi = this.radio('WiFi'), bt = this.radio('Bluetooth');
+    const wifiOn = wifi?.state === 'On';
+    const ssid = this.wifi?.current?.state === 'connected' ? this.wifi.current.ssid : null;
+    this.tile('#t-wifi', wifiOn, !wifi ? 'No adapter' : wifiOn ? (ssid || 'Not connected') : 'Off');
+    const btOn = bt?.state === 'On';
+    const conn = (this.bt || []).filter((d) => d.connected).length;
+    this.tile('#t-bt', btOn, !bt ? 'No adapter' : btOn ? (conn ? `${conn} connected` : 'On') : 'Off');
+    // Theme
+    this.tile('#t-dark', st.dark, st.dark ? 'On' : 'Off');
+    // Wired network
+    const a = state.stats?.net?.adapter;
+    const online = state.latency?.status === 'online';
+    if (a && !a.wifi) this.tile('#t-net', online, `${a.linkBps >= 1e9 ? `${(a.linkBps / 1e9).toFixed(0)} Gbps` : `${Math.round(a.linkBps / 1e6)} Mbps`} · ${online ? 'Online' : state.latency?.status || '--'}`);
+    else this.tile('#t-net', false, 'Not connected');
+    // Media
+    const m = st.media, card = $('#media');
+    card.classList.toggle('none', !m);
+    card.classList.toggle('playing', m?.status === 'Playing');
+    $('#m-title').textContent = m?.title || (m ? 'Unknown title' : 'Nothing playing');
+    const appName = m ? (m.app || '').replace(/\.exe$/i, '').split('!')[0].split('.').pop() : '';
+    $('#m-artist').textContent = m ? (m.artist || appName || 'Unknown artist') : 'Play something in any app';
+    $('#m-app').textContent = appName;
+    if (this.drawer) this.renderDrawer();
+  },
+
+  // ---- sliders ----
+  measure() { $$('.page[data-page="controls"] .range').forEach((r) => r.style.setProperty('--w', `${r.clientWidth}px`)); },
+  setRange(key, v, off) {
+    if (this.dragging === key) return;
+    const r = $(`.range[data-range="${key}"]`);
+    if (!r) return;
+    r.style.setProperty('--v', Math.max(0, Math.min(1, v)).toFixed(3));
+    r.classList.toggle('off', !!off);
+  },
+  sendRange: (() => {
+    let timer = null, last = 0;
+    return function (key, v, final) {
+      const go = () => { last = Date.now(); controls.applyRange(key, v); };
+      clearTimeout(timer);
+      if (final || Date.now() - last > (key.startsWith('b') ? 250 : 60)) go(); else timer = setTimeout(go, 80);
+    };
+  })(),
+  async applyRange(key, v) {
+    this.hold = Date.now() + 600; // don't let a poll snap the slider back mid-drag
+    const pct = Math.round(v * 100);
+    try {
+      if (key === 'vol' && this.out()) { await mc.sys('setVolume', { id: this.out().id, value: pct }); this.out().volume = pct; this.out().muted = false; }
+      else if (key === 'mic' && this.inp()) { await mc.sys('setVolume', { id: this.inp().id, value: pct }); this.inp().volume = pct; this.inp().muted = false; }
+      else if (key.startsWith('b')) {
+        const m = this.mons.find((x) => `b${x.index}` === key);
+        if (m) { const val = Math.round(m.min + v * (m.max - m.min)); await mc.sys('setBrightness', { index: m.index, value: val }); m.cur = val; }
+      }
+    } catch (e) { toast(`Could not change it: ${e.message}`); }
+    if (!key.startsWith('b')) this.render();
+  },
+
+  renderBrightness() {
+    const box = $('#sl-bright');
+    if (!this.mons.length) { box.innerHTML = '<div class="sl"><div class="sl-h"><span class="sl-name"><em>Brightness</em></span></div><div class="sl-empty">Not available: turn on DDC/CI in your monitor\'s menu to control it here.</div></div>'; return; }
+    box.innerHTML = this.mons.map((m, n) => {
+      const pct = m.max > m.min ? (m.cur - m.min) / (m.max - m.min) : 0;
+      return `<div class="sl"><div class="sl-h"><span class="sl-name"><em>Brightness</em><span>${esc(this.mons.length > 1 ? `Display ${n + 1}` : shortName(m.name))}</span></span><b class="sl-v">${Math.round(pct * 100)}%</b></div>
+        <div class="range bright" data-range="b${m.index}" style="--v:${pct.toFixed(3)}"><i class="fill"></i><i class="knob"></i></div></div>`;
+    }).join('');
+    this.measure();
+  },
+
+  renderPlans() {
+    const seg = $('#plans');
+    if (!this.plans.length) { seg.innerHTML = '<button disabled>No power plans found</button>'; return; }
+    seg.innerHTML = `<i class="seg-ink"></i>${this.plans.map((p) => `<button data-plan="${p.guid}" class="${p.active ? 'on' : ''}" title="${esc(p.name)}">${esc(p.name)}</button>`).join('')}`;
+    $('#plan-name').textContent = this.plans.find((p) => p.active)?.name || '--';
+    requestAnimationFrame(() => {
+      const on = seg.querySelector('button.on'), ink = seg.querySelector('.seg-ink');
+      if (on && ink) { ink.style.width = `${on.offsetWidth}px`; ink.style.transform = `translateX(${on.offsetLeft - 3}px)`; }
+    });
+  },
+
+  // ---- drawer (device / network pickers) ----
+  openDrawer(kind) {
+    this.drawer = kind; this.drawerSig = '';
+    $('#dr-title').textContent = { wifi: 'Wi-Fi networks', bt: 'Bluetooth devices', out: 'Output device', in: 'Input device' }[kind];
+    this.renderDrawer();
+    $('#drawer').classList.add('open');
+    if (kind === 'bt') this.refreshBt();
+    if (kind === 'wifi') this.refreshWifi();
+  },
+  closeDrawer() { this.drawer = null; $('#drawer').classList.remove('open'); },
+  renderDrawer() {
+    const k = this.drawer;
+    let html = '';
+    if (k === 'out' || k === 'in') {
+      const list = (k === 'out' ? this.st?.audio?.out : this.st?.audio?.in) || [];
+      html = list.map((d, n) => `<div class="dev ${d.isDefault ? 'sel' : ''}" data-dev="${esc(d.id)}" style="animation-delay:${n * 40}ms">
+          <i class="d-ico">${k === 'out' ? (/head|ear|bud|pods/i.test(d.name) ? ICONS.headphones : ICONS.speaker) : ICONS.mic}</i>
+          <div class="d-txt"><b>${esc(shortName(d.name))}</b><small>${esc((d.name.match(/\((.*)\)$/) || [])[1] || '')}${d.muted ? ' · muted' : ` · ${d.volume}%`}</small></div><i class="radio"></i></div>`).join('') || '<div class="dr-empty">No devices found</div>';
+    } else if (k === 'bt') {
+      const r = this.radio('Bluetooth');
+      if (r && r.state !== 'On') html += '<div class="dr-note">Bluetooth is off.<button data-act="bt-on">Turn on</button></div>';
+      html += (this.bt || []).map((d, n) => `<div class="dev ${d.connected ? 'conn' : ''}" style="animation-delay:${n * 40}ms">
+          <i class="d-ico">${d.kind === 'AudioVideo' ? ICONS.headphones : d.kind === 'Phone' ? ICONS.phone : d.kind === 'Peripheral' ? ICONS.keyboard : ICONS.bt}</i>
+          <div class="d-txt"><b>${esc(d.name)}</b><small>${d.connected ? 'Connected' : 'Paired'}</small></div></div>`).join('');
+      if (this.bt && !this.bt.length) html += '<div class="dr-empty">No paired devices</div>';
+      if (!this.bt) html += '<div class="dr-empty">Looking for devices...</div>';
+      html += '<div class="dr-note" style="color:var(--dim);background:none;border-color:var(--line)">Windows only lets its own Settings app connect or pair Bluetooth devices.<button data-act="bt-settings">Connect or add a device</button></div>';
+    } else if (k === 'wifi') {
+      const w = this.wifi, r = this.radio('WiFi');
+      if (!w || !w.available) html = '<div class="dr-empty">No Wi-Fi adapter found</div>';
+      else if (r && r.state !== 'On') html = '<div class="dr-note">Wi-Fi is off.<button data-act="wifi-on">Turn on</button></div>';
+      else {
+        if (w.current?.state === 'connected') html += `<div class="dev conn"><i class="d-ico">${ICONS.wifi}</i><div class="d-txt"><b>${esc(w.current.ssid)}</b><small>Connected · ${w.current.signal}%</small></div><button class="d-act" data-act="wifi-off">Disconnect</button></div>`;
+        if (w.needsLocation) html += '<div class="dr-note">Windows needs Location turned on to list Wi-Fi networks.<button data-act="location">Open location settings</button></div>';
+        html += (w.networks || []).filter((n) => n.ssid !== w.current?.ssid).map((n, i) => {
+          const bars = Math.ceil(n.signal / 25);
+          return `<div class="dev" style="animation-delay:${i * 40}ms"><i class="d-ico">${ICONS.wifi}</i><div class="d-txt"><b>${esc(n.ssid)}</b><small>${n.secure ? 'Secured' : 'Open'}${n.known ? ' · Saved' : ''}</small></div>
+            <span class="bars">${[1, 2, 3, 4].map((b) => `<i class="${b <= bars ? 'on' : ''}"></i>`).join('')}</span>
+            <button class="d-act" data-act="${n.known ? 'wifi-connect' : 'wifi-settings'}" data-ssid="${esc(n.ssid)}">${n.known ? 'Connect' : 'Set up'}</button></div>`;
+        }).join('');
+        if (!w.needsLocation && !(w.networks || []).length) html += '<div class="dr-empty">No networks in range</div>';
+      }
+    }
+    if (html === this.drawerSig) return; // unchanged: keep DOM (and its animations) as is
+    this.drawerSig = html;
+    $('#dr-body').innerHTML = html;
+  },
+
+  // ---- actions ----
+  async toggle(kind) {
+    const t = $(`[data-toggle="${kind}"]`);
+    t.classList.add('busy');
+    this.hold = Date.now() + 800;
+    try {
+      if (kind === 'wifi') { const r = this.radio('WiFi'); if (!r) throw new Error('No Wi-Fi adapter'); const on = r.state !== 'On'; await mc.sys('setRadio', { kind: 'WiFi', on }); r.state = on ? 'On' : 'Off'; }
+      if (kind === 'bt') { const r = this.radio('Bluetooth'); if (!r) throw new Error('No Bluetooth adapter'); const on = r.state !== 'On'; await mc.sys('setRadio', { kind: 'Bluetooth', on }); r.state = on ? 'On' : 'Off'; }
+      if (kind === 'sound') { const o = this.out(); await mc.sys('setMute', { id: o.id, muted: !o.muted }); o.muted = !o.muted; }
+      if (kind === 'mic') { const i = this.inp(); await mc.sys('setMute', { id: i.id, muted: !i.muted }); i.muted = !i.muted; }
+      if (kind === 'dark') { await mc.sys('setDark', { dark: !this.st.dark }); this.st.dark = !this.st.dark; }
+      this.render();
+    } catch (e) { toast(e.message); }
+    t.classList.remove('busy');
+  },
+};
+
+// Media visualiser bars, each with its own rhythm
+$('#viz').innerHTML = Array.from({ length: 30 }, (_, i) => {
+  const hi = (0.35 + Math.abs(Math.sin(i * 1.7)) * 0.6).toFixed(2);
+  return `<i style="--d:${(0.45 + ((i * 37) % 50) / 100).toFixed(2)}s;--dl:-${((i * 13) % 10) / 10}s;--hi:${hi};--lo:${(0.06 + ((i * 7) % 5) / 40).toFixed(2)}"></i>`;
+}).join('');
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-settings]'); if (b) mc.openSettings(b.dataset.settings); });
+
+// Tiles: click toggles, chevron opens the picker
+$('.tiles').addEventListener('click', (e) => {
+  const chev = e.target.closest('[data-drawer]');
+  if (chev) { e.stopPropagation(); controls.openDrawer(chev.dataset.drawer); return; }
+  const t = e.target.closest('.tile');
+  if (!t) return;
+  if (t.dataset.openSettings) mc.openSettings(t.dataset.openSettings);
+  else if (t.dataset.toggle && controls.st) controls.toggle(t.dataset.toggle);
+});
+$('.sliders').addEventListener('click', (e) => { const n = e.target.closest('.sl-name[data-drawer]'); if (n) controls.openDrawer(n.dataset.drawer); });
+$('#dr-back').addEventListener('click', () => controls.closeDrawer());
+$('#dr-settings').addEventListener('click', () => mc.openSettings(SETTINGS_FOR[controls.drawer] || 'devices'));
+$('#dr-body').addEventListener('click', async (e) => {
+  const dev = e.target.closest('[data-dev]');
+  if (dev && !e.target.closest('button')) {
+    const list = controls.drawer === 'out' ? controls.st.audio.out : controls.st.audio.in;
+    list.forEach((d) => { d.isDefault = d.id === dev.dataset.dev; });
+    controls.renderDrawer(); controls.render();
+    try { await mc.sys('setDefault', { id: dev.dataset.dev }); toast(`Switched to ${shortName(list.find((d) => d.isDefault).name)}`); } catch (err) { toast(err.message); }
+    controls.refresh();
+    return;
+  }
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const act = b.dataset.act;
+  if (act === 'bt-on') controls.toggle('bt');
+  if (act === 'wifi-on') controls.toggle('wifi');
+  if (act === 'bt-settings') mc.openSettings('bluetooth');
+  if (act === 'wifi-settings') mc.openSettings('wifi');
+  if (act === 'location') mc.openSettings('location');
+  if (act === 'wifi-off') { await mc.wifiDisconnect(); toast('Disconnected'); controls.refreshWifi(); }
+  if (act === 'wifi-connect') {
+    b.textContent = 'Connecting...';
+    const r = await mc.wifiConnect(b.dataset.ssid);
+    toast(r.ok ? `Connecting to ${b.dataset.ssid}` : `Could not connect: ${r.message}`);
+    setTimeout(() => controls.refreshWifi(), 3000);
+  }
+});
+
+// Sliders: drag, click or scroll
+document.addEventListener('pointerdown', (e) => {
+  const r = e.target.closest('.page[data-page="controls"] .range');
+  if (!r) return;
+  r.setPointerCapture(e.pointerId);
+  const key = r.dataset.range;
+  controls.dragging = key;
+  r.classList.add('drag');
+  const set = (ev, final) => {
+    const rect = r.getBoundingClientRect();
+    const v = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+    r.style.setProperty('--v', v.toFixed(3));
+    const lbl = r.parentElement.querySelector('.sl-v');
+    if (lbl) lbl.textContent = `${Math.round(v * 100)}%`;
+    controls.sendRange(key, v, final);
+  };
+  set(e, false);
+  const move = (ev) => set(ev, false);
+  const up = (ev) => {
+    set(ev, true);
+    r.classList.remove('drag');
+    controls.dragging = null;
+    r.removeEventListener('pointermove', move);
+    r.removeEventListener('pointerup', up);
+  };
+  r.addEventListener('pointermove', move);
+  r.addEventListener('pointerup', up);
+});
+document.addEventListener('wheel', (e) => {
+  const r = e.target.closest('.page[data-page="controls"] .range');
+  if (!r) return;
+  e.preventDefault();
+  const v = Math.max(0, Math.min(1, parseFloat(r.style.getPropertyValue('--v') || '0') + (e.deltaY < 0 ? 0.02 : -0.02)));
+  r.style.setProperty('--v', v.toFixed(3));
+  const lbl = r.parentElement.querySelector('.sl-v');
+  if (lbl) lbl.textContent = `${Math.round(v * 100)}%`;
+  controls.sendRange(r.dataset.range, v, false);
+}, { passive: false });
+
+// Media
+$('.m-ctl').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-media]');
+  if (!b) return;
+  try { await mc.sys('media', { action: b.dataset.media }); } catch (err) { toast(err.message); }
+  setTimeout(() => controls.refresh(), 300);
+});
+
+// Power plans + actions
+$('#plans').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-plan]');
+  if (!b || b.classList.contains('on')) return;
+  controls.plans.forEach((p) => { p.active = p.guid === b.dataset.plan; });
+  controls.renderPlans();
+  await mc.setPowerPlan(b.dataset.plan);
+  controls.refreshPlans();
+});
+const armTimers = {};
+$('.pw-actions').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-power]');
+  if (!b) return;
+  const kind = b.dataset.power;
+  if (kind === 'lock') { mc.sys('lock'); return; }
+  // Sleep, restart and shut down need a second click within 3 s
+  if (!b.classList.contains('arm')) {
+    b.classList.add('arm');
+    b.querySelector('span').textContent = 'Confirm?';
+    armTimers[kind] = setTimeout(() => { b.classList.remove('arm'); b.querySelector('span').textContent = { sleep: 'Sleep', restart: 'Restart', shutdown: 'Shut down' }[kind]; }, 3000);
+    return;
+  }
+  clearTimeout(armTimers[kind]);
+  b.classList.remove('arm');
+  b.querySelector('span').textContent = { sleep: 'Sleep', restart: 'Restart', shutdown: 'Shut down' }[kind];
+  if (kind === 'sleep') mc.sys('sleep');
+  else mc.session(kind);
+});
+window.addEventListener('resize', () => controls.measure());
+
+// Scroll on the pet to change the volume, from anywhere
+let wheelAcc = 0, wheelBusy = false;
+$('#pet').addEventListener('wheel', async (e) => {
+  e.preventDefault();
+  wheelAcc += e.deltaY < 0 ? 2 : -2;
+  if (wheelBusy) return;
+  wheelBusy = true;
+  try {
+    while (wheelAcc) {
+      const d = wheelAcc; wheelAcc = 0;
+      const v = await mc.sys('stepVolume', { delta: d });
+      toast(`Volume ${v}%`);
+    }
+  } catch (err) { toast(err.message); }
+  wheelBusy = false;
+}, { passive: false });
 
 // ---------------- Claude plan limits (5-hour + weekly) ----------------
 let limits = null;

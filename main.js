@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, globalShortcut, powerMonitor, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { execFile } = require('child_process');
 
 const W = 800, H = 700;
 
@@ -14,6 +15,8 @@ if (!app.requestSingleInstanceLock()) {
   const cleaner = require('./src/cleaner');
   const procs = require('./src/processes');
   const ClaudeBridge = require('./src/claude');
+  const SysControl = require('./src/syscontrol');
+  const sys = new SysControl();
 
   let win, tray, settings, ownHwnd = 0;
   let idle = false, cursorTimer = null, lastCursor = '';
@@ -23,29 +26,52 @@ if (!app.requestSingleInstanceLock()) {
 
   const send = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send(ch, data); };
 
-  // Launch at sign-in through a Startup-folder shortcut. A Run-key command longer than 260 characters
-  // (easy when the project sits in a deep folder) is silently skipped by Windows; shortcuts have no such limit.
-  function applyLoginItem() {
-    const appDir = path.resolve(app.getAppPath());
-    const lnk = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Mission Control.lnk');
-    // Remove the Run-key entry older versions created
-    app.setLoginItemSettings({ openAtLogin: false, name: 'Mission Control', path: process.execPath, args: app.isPackaged ? [] : [appDir] });
+  // Launch at sign-in through a Task Scheduler "at log on" task: it starts right at sign-in, while Run-key
+  // entries and Startup-folder shortcuts wait behind every other startup app (minutes on a busy PC).
+  // Falls back to a Startup-folder shortcut if the task cannot be registered.
+  const TASK = 'Mission Control';
+  const startupLnk = () => path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Mission Control.lnk');
+  function ps(script, env = {}) {
+    return new Promise((resolve) => {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+        { windowsHide: true, env: { ...process.env, ...env }, timeout: 30000 }, (err, stdout) => resolve({ ok: !err, out: (stdout || '').trim() }));
+    });
+  }
+  function writeShortcut(appDir) {
     try {
-      if (settings.openAtLogin) {
-        shell.writeShortcutLink(lnk, fs.existsSync(lnk) ? 'replace' : 'create', {
-          target: process.execPath,
-          args: app.isPackaged ? '' : `"${appDir}"`,
-          cwd: appDir,
-          description: 'Mission Control widget',
-          icon: process.execPath,
-          iconIndex: 0,
-        });
-      } else if (fs.existsSync(lnk)) {
-        fs.unlinkSync(lnk);
-      }
-    } catch (e) {
-      console.error('Could not update the startup shortcut:', e);
+      const lnk = startupLnk();
+      shell.writeShortcutLink(lnk, fs.existsSync(lnk) ? 'replace' : 'create', {
+        target: process.execPath, args: app.isPackaged ? '' : `"${appDir}"`, cwd: appDir,
+        description: 'Mission Control widget', icon: process.execPath, iconIndex: 0,
+      });
+    } catch (e) { console.error('Could not write the startup shortcut:', e); }
+  }
+  function removeShortcut() { try { const l = startupLnk(); if (fs.existsSync(l)) fs.unlinkSync(l); } catch {} }
+  async function applyLoginItem() {
+    const appDir = path.resolve(app.getAppPath());
+    const args = app.isPackaged ? '' : `"${appDir}"`;
+    // Remove the Run-key entry older versions created (Windows skips long Run commands anyway)
+    app.setLoginItemSettings({ openAtLogin: false, name: 'Mission Control', path: process.execPath, args: app.isPackaged ? [] : [appDir] });
+    const env = { MC_EXE: process.execPath, MC_ARGS: args, MC_DIR: appDir, MC_TASK: TASK };
+    if (!settings.openAtLogin) {
+      removeShortcut();
+      await ps('Unregister-ScheduledTask -TaskName $env:MC_TASK -Confirm:$false -ErrorAction SilentlyContinue', env);
+      return;
     }
+    // Skip the (slow) registration when the task already points at this copy
+    const check = await ps("$t = Get-ScheduledTask -TaskName $env:MC_TASK -ErrorAction SilentlyContinue; if ($t -and $t.Actions[0].Execute -eq $env:MC_EXE -and $t.Actions[0].Arguments -eq $env:MC_ARGS -and $t.Settings.Priority -eq 4) { 'same' }", env);
+    if (check.out === 'same') { removeShortcut(); return; }
+    const reg = await ps([
+      '$u = "$env:USERDOMAIN\\$env:USERNAME"',
+      '$a = New-ScheduledTaskAction -Execute $env:MC_EXE -Argument $env:MC_ARGS -WorkingDirectory $env:MC_DIR',
+      '$t = New-ScheduledTaskTrigger -AtLogOn -User $u',
+      '$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -Priority 4 -MultipleInstances IgnoreNew',
+      '$p = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Limited',
+      "Register-ScheduledTask -TaskName $env:MC_TASK -Description 'Starts the Mission Control widget at sign-in' -Action $a -Trigger $t -Settings $s -Principal $p -Force -ErrorAction Stop | Out-Null",
+      "'ok'",
+    ].join('; '), env);
+    if (reg.out.endsWith('ok')) removeShortcut();
+    else writeShortcut(appDir); // fallback: slower, but always works
   }
 
   // Small while collapsed (only the notch, bubble and toast) so idle compositing stays cheap.
@@ -94,6 +120,7 @@ if (!app.requestSingleInstanceLock()) {
     if (idle) return;
     idle = true;
     stopWork();
+    sys.stop();
     send('idle', true);
     win.hide();
     updateTray();
@@ -186,6 +213,22 @@ if (!app.requestSingleInstanceLock()) {
   ipcMain.on('claude:new', () => claude.reset());
   ipcMain.on('app:quit', () => app.quit());
 
+  // ---- System controls ----
+  const SETTINGS_PAGES = {
+    bluetooth: 'ms-settings:bluetooth', wifi: 'ms-settings:network-wifi', network: 'ms-settings:network',
+    sound: 'ms-settings:sound', display: 'ms-settings:display', power: 'ms-settings:powersleep',
+    location: 'ms-settings:privacy-location', devices: 'ms-settings:connecteddevices',
+    nightlight: 'ms-settings:nightlight', notifications: 'ms-settings:notifications',
+  };
+  ipcMain.handle('sys:helper', (_e, cmd, args) => sys.helper(String(cmd), args || {}));
+  ipcMain.handle('sys:wifi', () => sys.wifi());
+  ipcMain.handle('sys:wifiConnect', (_e, ssid) => sys.wifiConnect(String(ssid)));
+  ipcMain.handle('sys:wifiDisconnect', () => sys.wifiDisconnect());
+  ipcMain.handle('sys:plans', () => sys.powerPlans());
+  ipcMain.handle('sys:setPlan', (_e, guid) => sys.setPowerPlan(String(guid)));
+  ipcMain.handle('sys:session', (_e, kind) => sys.session(String(kind)));
+  ipcMain.on('sys:open', (_e, page) => { if (SETTINGS_PAGES[page]) shell.openExternal(SETTINGS_PAGES[page]); });
+
   stats.on('stats', (s) => send('stats', s));
   netmon.on('live', (l) => send('latency', l));
   claude.on('event', (e) => send('claude', e));
@@ -215,8 +258,10 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     app.setAppUserModelId('com.missioncontrol.widget');
     settings = Settings.load();
-    applyLoginItem();
     createWindow();
+    // Keep sign-in fast: verify the startup task once things settle. Dev capture runs never touch it,
+    // so a test copy can't steal startup from the real install.
+    if (!process.env.MC_SHOTS && !process.env.MC_DIAG) setTimeout(applyLoginItem, 20000);
     tray = new Tray(trayIcon());
     tray.on('click', () => openMode('panel'));
     updateTray();
@@ -251,6 +296,14 @@ if (!app.requestSingleInstanceLock()) {
     send('ui:open', 'panel'); await wait(2500); await shot('3-overview');
     for (const t of (process.env.MC_TABS || 'network,apps,cleaner,settings').split(',')) {
       await js(`document.querySelector('.tab[data-tab="${t}"]').click()`); await wait(t === 'cleaner' ? 16000 : 3500); await shot(`4-${t}`);
+      if (t === 'controls') {
+        await wait(2500); await shot('4-controls-loaded');
+        // Preview of the "playing" look (the next poll restores the real state)
+        await js("controls.stop(); const m = document.getElementById('media'); m.classList.remove('none'); m.classList.add('playing'); document.getElementById('m-title').textContent = 'Demo track'; document.getElementById('m-artist').textContent = 'Demo artist'");
+        await wait(700); await shot('4-controls-playing'); await js('controls.start()');
+        await js("controls.openDrawer('out')"); await wait(1500); await shot('4-controls-drawer');
+        await js('controls.closeDrawer()'); await wait(700);
+      }
       if (t === 'network' && process.env.MC_SPEED) {
         await js("document.getElementById('sp-run').click()"); await wait(9000); await shot('4-network-testing');
         await wait(20000); await shot('4-network-result');
@@ -264,6 +317,6 @@ if (!app.requestSingleInstanceLock()) {
     fs.writeFileSync(path.join(dir, 'done.txt'), 'ok');
   }
 
-  app.on('will-quit', () => { globalShortcut.unregisterAll(); stopWork(); claude.stop(); });
+  app.on('will-quit', () => { globalShortcut.unregisterAll(); stopWork(); claude.stop(); sys.stop(); });
   app.on('window-all-closed', () => app.quit());
 }

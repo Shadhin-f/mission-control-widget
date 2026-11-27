@@ -17,6 +17,15 @@ with an animated robot pet, live PC stats, internet speed tests, a cache cleaner
 - **Mission Control panel** (click the pet):
   - **Overview**: CPU / RAM / GPU / VRAM gauges, GPU temperature and power, a load history graph,
     per-thread load, storage per drive, uptime and system info.
+  - **Controls**: one place for your PC's inputs, outputs and toggles, synced live with Windows:
+    - Wi-Fi and Bluetooth on/off, with Wi-Fi networks (connect to saved ones) and paired Bluetooth
+      devices with their connection status
+    - Sound and microphone mute, volume and mic level sliders, and switching the default output
+      or input device
+    - Monitor brightness over DDC/CI (laptop panels through WMI)
+    - Dark mode, the "now playing" media session with play/pause/next/previous and a visualiser
+    - Power plan switching, Lock, Sleep, Restart and Shut down (the last three ask you to confirm)
+    - Shortcuts to the matching Windows Settings pages
   - **Network**: a live transfer graph, constant ping / jitter / packet-loss monitoring, a speed
     test you start by hand (download, upload, ping, jitter, loss) and test history.
   - **Apps**: running apps and background processes grouped by executable and sorted by memory,
@@ -63,10 +72,12 @@ npm start
 
 The notch appears at the top-center of your main display, and a tray icon appears next to the clock.
 
-On first launch, Mission Control adds a shortcut to your Startup folder
-(`shell:startup`) so it **starts when you sign in to Windows**. You can turn this off in
-**Settings → Launch at startup** or from the tray menu. If you move the folder, launch it once from
-the new place and the shortcut updates itself.
+On first launch, Mission Control registers a **Task Scheduler "at log on" task** (no admin rights
+needed) so it **starts as soon as you sign in**. Run-key entries and Startup-folder shortcuts wait
+behind every other startup app, which can take minutes on a busy PC. If the task can't be created,
+it falls back to a Startup-folder shortcut. You can turn this off in **Settings → Launch at
+startup** or from the tray menu. If you move the folder, launch it once from the new place and the
+task updates itself.
 
 ### Troubleshooting
 
@@ -91,6 +102,7 @@ the new place and the shortcut updates itself.
 | Ask Claude | Right-click the pet, press `Ctrl+Alt+Space`, or hover the notch and click **Ask Claude** |
 | Collapse | `Esc`, the ˄ button, or click anywhere else (use the pin button to keep it open) |
 | Refresh Claude limits | Click the Claude usage chip on the right of the notch |
+| Change volume from anywhere | Scroll over the pet |
 | Quit | **Settings → Quit**, or the tray menu |
 
 ![Hover actions](docs/screenshots/hover.png)
@@ -149,6 +161,10 @@ src/network.js       Live latency monitor + Cloudflare speed test
 src/processes.js     tasklist + window enumeration, end task
 src/cleaner.js       Cache / junk scanner and cleaner
 src/claude.js        Claude Code CLI bridge (chat streaming + usage limits)
+src/syscontrol.js    Controls tab backend: drives sysctl.ps1, netsh (Wi-Fi), powercfg
+src/sysctl.ps1       Long-lived helper (started on first use, stops when idle): Core Audio,
+                     Wi-Fi/Bluetooth radios, paired devices, media session, DDC/CI
+                     brightness, dark mode, lock / sleep
 src/settings.js      JSON settings in the user data folder
 renderer/            UI: index.html, styles.css, app.js (pet, charts, tabs, chat)
 ```

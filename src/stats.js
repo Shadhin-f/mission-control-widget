@@ -1,12 +1,14 @@
 // Live system stats: CPU, RAM, GPU (nvidia-smi stream), disks, network throughput.
 const os = require('os');
 const fs = require('fs');
-const { spawn, execFileSync } = require('child_process');
+const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
 const native = require('./native');
 
+// Non-blocking check (no child process): look for nvidia-smi on PATH
 function hasNvidiaSmi() {
-  try { execFileSync('where', ['nvidia-smi'], { windowsHide: true, stdio: 'ignore' }); return true; } catch { return false; }
+  const path = require('path');
+  return (process.env.PATH || '').split(';').some((d) => d && fs.existsSync(path.join(d, 'nvidia-smi.exe')));
 }
 
 class Stats extends EventEmitter {
