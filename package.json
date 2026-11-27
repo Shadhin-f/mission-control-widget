@@ -1,0 +1,38 @@
+{
+  "name": "mission-control-widget",
+  "productName": "Mission Control",
+  "version": "1.0.0",
+  "description": "Futuristic top-center Windows widget with an animated pet, live PC stats, speed test, cache cleaner and Claude Code chat",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "windows",
+    "widget",
+    "system-monitor",
+    "speed-test",
+    "cache-cleaner",
+    "claude-code",
+    "desktop-pet"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Shadhin-f/mission-control-widget.git"
+  },
+  "license": "MIT",
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "koffi": "^3.3.8"
+  },
+  "devDependencies": {
+    "electron": "^45.5.0"
+  }
+}

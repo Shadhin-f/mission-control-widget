@@ -1,0 +1,35 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+const on = (ch) => (cb) => ipcRenderer.on(ch, (_e, d) => cb(d));
+
+contextBridge.exposeInMainWorld('mc', {
+  setInteractive: (v) => ipcRenderer.send('mouse:interactive', v),
+  focus: () => ipcRenderer.send('ui:focus'),
+  setSize: (size) => ipcRenderer.invoke('ui:size', size),
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSetting: (k, v) => ipcRenderer.invoke('settings:set', k, v),
+  getStatic: () => ipcRenderer.invoke('static:get'),
+  listProcs: () => ipcRenderer.invoke('procs:list'),
+  killProcs: (pids) => ipcRenderer.invoke('procs:kill', pids),
+  scanCache: () => ipcRenderer.invoke('cleaner:scan'),
+  cleanCache: (ids) => ipcRenderer.invoke('cleaner:clean', ids),
+  runSpeedTest: () => ipcRenderer.invoke('speed:run'),
+  claudeSend: (prompt, mode) => ipcRenderer.send('claude:send', prompt, mode),
+  claudeStop: () => ipcRenderer.send('claude:stop'),
+  claudeNew: () => ipcRenderer.send('claude:new'),
+  quit: () => ipcRenderer.send('app:quit'),
+  getLimits: () => ipcRenderer.invoke('limits:get'),
+  refreshLimits: () => ipcRenderer.send('limits:refresh'),
+  onLimits: on('limits'),
+  onStats: on('stats'),
+  onLatency: on('latency'),
+  onCursor: on('cursor'),
+  onIdle: on('idle'),
+  onUserIdle: on('user-idle'),
+  onBlur: on('win:blur'),
+  onOpen: on('ui:open'),
+  onSettings: on('settings'),
+  onSpeed: on('speed:progress'),
+  onCleaner: on('cleaner:progress'),
+  onClaude: on('claude'),
+});

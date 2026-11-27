@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:">
+<title>Mission Control</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- The notch / shell that morphs between collapsed, hover, panel and chat -->
+<div id="shell" class="hit">
+  <div class="shell-sweep"></div>
+
+  <header id="bar">
+    <div class="side left">
+      <div class="chip stat" id="c-cpu" title="CPU load">
+        <svg class="ico" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/><rect x="10" y="10" width="4" height="4" rx=".6"/><path d="M9.5 3v3M14.5 3v3M9.5 18v3M14.5 18v3M3 9.5h3M3 14.5h3M18 9.5h3M18 14.5h3"/></svg>
+        <span class="v">--</span><i class="meter"><b></b></i></div>
+      <div class="chip stat" id="c-gpu" title="GPU load">
+        <svg class="ico" viewBox="0 0 24 24"><rect x="2.5" y="6" width="17" height="11" rx="2"/><circle cx="9" cy="11.5" r="3"/><path d="M14.5 9.5h2.5M14.5 13.5h2.5M19.5 9h2v5h-2M5.5 17v2.5M9 17v2.5"/></svg>
+        <span class="v">--</span><i class="meter"><b></b></i></div>
+      <div class="chip stat" id="c-ram" title="Memory in use">
+        <svg class="ico" viewBox="0 0 24 24"><rect x="2.5" y="7" width="19" height="9" rx="1.5"/><path d="M6 9.5v4M10 9.5v4M14 9.5v4M18 9.5v4M5 16v2.5M9 16v2.5M15 16v2.5M19 16v2.5"/></svg>
+        <span class="v">--</span><i class="meter"><b></b></i></div>
+    </div>
+    <div class="side right">
+      <div class="chip net" id="c-net" title="Live download / upload"><span class="dn"><em>&#8595;</em><span>--</span></span><span class="up"><em>&#8593;</em><span>--</span></span></div>
+      <div class="chip lim" id="c-lim" title="Claude Code usage. Click to refresh.">
+        <svg class="ico spark" viewBox="0 0 24 24"><path d="M12 2.5l2.1 6.6 6.9 2.4-6.9 2.4L12 20.5l-2.1-6.6L3 11.5l6.9-2.4z"/></svg>
+        <span class="w" id="lim-5h"><small>5h</small><b>--</b></span>
+        <span class="w" id="lim-7d"><small>7d</small><b>--</b></span>
+      </div>
+    </div>
+  </header>
+
+  <div id="quick">
+    <button class="qbtn" data-open="panel"><span class="ico">&#9672;</span>Mission Control</button>
+    <button class="qbtn claude" data-open="chat"><span class="ico">&#10022;</span>Ask Claude</button>
+  </div>
+
+  <!-- ============ MISSION CONTROL PANEL ============ -->
+  <section id="panel">
+    <nav id="tabs">
+      <div class="tabs">
+        <button class="tab active" data-tab="overview">Overview</button>
+        <button class="tab" data-tab="network">Network</button>
+        <button class="tab" data-tab="apps">Apps</button>
+        <button class="tab" data-tab="cleaner">Cleaner</button>
+        <button class="tab" data-tab="settings">Settings</button>
+        <i class="tab-ink"></i>
+      </div>
+      <div class="tools">
+        <span id="clock">--:--</span>
+        <button class="icon-btn" id="btn-pin" title="Keep open when clicking away">&#9906;</button>
+        <button class="icon-btn" data-open="chat" title="Ask Claude (Ctrl+Alt+Space)">&#10022;</button>
+        <button class="icon-btn" data-open="collapsed" title="Collapse (Esc)">&#8963;</button>
+      </div>
+    </nav>
+
+    <div class="pages">
+      <!-- OVERVIEW -->
+      <div class="page active" data-page="overview">
+        <div class="row gauges">
+          <div class="card gauge" id="g-cpu"><svg viewBox="0 0 100 100"><circle class="trk" cx="50" cy="50" r="40"/><circle class="arc" cx="50" cy="50" r="40"/></svg><div class="gv"><b>--</b><small>CPU</small></div><div class="gsub" id="cpu-sub">--</div></div>
+          <div class="card gauge" id="g-ram"><svg viewBox="0 0 100 100"><circle class="trk" cx="50" cy="50" r="40"/><circle class="arc" cx="50" cy="50" r="40"/></svg><div class="gv"><b>--</b><small>RAM</small></div><div class="gsub" id="ram-sub">--</div></div>
+          <div class="card gauge" id="g-gpu"><svg viewBox="0 0 100 100"><circle class="trk" cx="50" cy="50" r="40"/><circle class="arc" cx="50" cy="50" r="40"/></svg><div class="gv"><b>--</b><small>GPU</small></div><div class="gsub" id="gpu-sub">--</div></div>
+          <div class="card gauge" id="g-vram"><svg viewBox="0 0 100 100"><circle class="trk" cx="50" cy="50" r="40"/><circle class="arc" cx="50" cy="50" r="40"/></svg><div class="gv"><b>--</b><small>VRAM</small></div><div class="gsub" id="vram-sub">--</div></div>
+        </div>
+        <div class="row">
+          <div class="card grow">
+            <div class="card-h"><span>Load history</span><span class="legend"><i style="--c:var(--cyan)"></i>CPU<i style="--c:var(--violet)"></i>RAM<i style="--c:var(--green)"></i>GPU</span></div>
+            <canvas id="ch-load" height="100" style="height:100px"></canvas>
+          </div>
+          <div class="card cores-card">
+            <div class="card-h"><span>Threads</span><span id="cpu-mhz" class="dim">--</span></div>
+            <div id="cores"></div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="card grow">
+            <div class="card-h"><span>Storage</span><span class="dim" id="disk-total">--</span></div>
+            <div id="disks"></div>
+          </div>
+          <div class="card side-card">
+            <div class="card-h"><span>Network</span><span class="status-pill" id="ov-status">--</span></div>
+            <div class="ov-net">
+              <div><small>Down</small><b id="ov-down">--</b></div>
+              <div><small>Up</small><b id="ov-up">--</b></div>
+              <div><small>Ping</small><b id="ov-ping">--</b></div>
+              <div><small>Loss</small><b id="ov-loss">--</b></div>
+            </div>
+            <div class="sys" id="sysinfo"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- NETWORK -->
+      <div class="page" data-page="network">
+        <div class="card">
+          <div class="card-h"><span>Live transfer</span><span class="legend"><i style="--c:var(--cyan)"></i><b id="nw-down">--</b><i style="--c:var(--pink)"></i><b id="nw-up">--</b></span></div>
+          <canvas id="ch-net" height="230" style="height:230px"></canvas>
+        </div>
+        <div class="row">
+          <div class="card speed">
+            <div class="card-h"><span>Speed test</span><span class="dim" id="sp-server">Cloudflare</span></div>
+            <div class="speed-body">
+              <div class="dial">
+                <svg viewBox="0 0 200 120">
+                  <defs><linearGradient id="dialg" x1="0" x2="1"><stop offset="0" stop-color="#3ef3ff"/><stop offset=".6" stop-color="#9b7bff"/><stop offset="1" stop-color="#ff4fd8"/></linearGradient></defs>
+                  <path class="dtrk" d="M20 110 A80 80 0 0 1 180 110"/>
+                  <path class="darc" id="dial-arc" d="M20 110 A80 80 0 0 1 180 110"/>
+                </svg>
+                <div class="dial-v"><b id="dial-num">0</b><small id="dial-unit">Mbps</small><span id="dial-phase">Ready</span></div>
+              </div>
+              <div class="sp-res">
+                <div><small>Download</small><b id="sp-down">--</b></div>
+                <div><small>Upload</small><b id="sp-up">--</b></div>
+                <div><small>Ping</small><b id="sp-ping">--</b></div>
+                <div><small>Jitter</small><b id="sp-jit">--</b></div>
+                <div><small>Packet loss</small><b id="sp-loss">--</b></div>
+                <div><small>ISP</small><b id="sp-isp" class="sm">--</b></div>
+              </div>
+            </div>
+            <button id="sp-run" class="cta">Run speed test</button>
+          </div>
+          <div class="card grow lat">
+            <div class="card-h"><span>Connection</span><span class="status-pill" id="nw-status">--</span></div>
+            <div class="lat-grid">
+              <div><small>Ping</small><b id="lt-ping">--</b></div>
+              <div><small>Jitter</small><b id="lt-jit">--</b></div>
+              <div><small>Loss (2 min)</small><b id="lt-loss">--</b></div>
+            </div>
+            <div id="lat-bars"></div>
+            <div class="adapter" id="adapter">--</div>
+            <div class="card-h sub"><span>Recent tests</span></div>
+            <div id="sp-hist"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- APPS -->
+      <div class="page" data-page="apps">
+        <div class="apps-head">
+          <input id="app-filter" placeholder="Filter processes..." spellcheck="false">
+          <div class="mem-sum"><div class="mem-bar" id="mem-bar"></div><span id="mem-text">--</span></div>
+        </div>
+        <div class="list" id="app-list"></div>
+      </div>
+
+      <!-- CLEANER -->
+      <div class="page" data-page="cleaner">
+        <div class="clean-head">
+          <div><b id="cl-total">Find reclaimable space</b><small id="cl-sub">Scan temp files, browser caches, shader caches and more.</small></div>
+          <button id="cl-scan" class="ghost">Scan</button>
+          <button id="cl-clean" class="cta danger" disabled>Clean selected</button>
+        </div>
+        <div class="list" id="cl-list"></div>
+        <div id="cl-confirm" class="confirm">
+          <div class="confirm-box">
+            <b id="cf-title">Delete?</b>
+            <p id="cf-text"></p>
+            <div class="confirm-actions"><button class="ghost" id="cf-cancel">Cancel</button><button class="cta danger" id="cf-ok">Delete permanently</button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="page" data-page="settings">
+        <div class="settings">
+          <label class="set"><div><b>Launch at startup</b><small>Start Mission Control when you sign in to Windows.</small></div><input type="checkbox" data-set="openAtLogin"><i class="sw"></i></label>
+          <label class="set"><div><b>Idle during fullscreen</b><small>Hide and stop all sampling while a game or video is fullscreen.</small></div><input type="checkbox" data-set="idleOnFullscreen"><i class="sw"></i></label>
+          <label class="set"><div><b>Collapse when clicking away</b><small>Fold back into the notch when another window gets focus.</small></div><input type="checkbox" data-set="collapseOnBlur"><i class="sw"></i></label>
+          <label class="set"><div><b>Auto-refresh Claude limits</b><small>Every 10 min while a 5-hour window is open, using a tiny Haiku request. Chat replies always update them.</small></div><input type="checkbox" data-set="autoLimits"><i class="sw"></i></label>
+          <div class="set"><div><b>Claude permission mode</b><small>Auto: Claude runs safe actions itself and is blocked from risky ones. Plan: read-only.</small></div>
+            <select data-set="chatMode"><option value="auto">Auto</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan (read-only)</option></select></div>
+          <div class="set"><div><b>Shortcuts</b><small><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>M</kbd> Mission Control &nbsp; <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Space</kbd> Ask Claude &nbsp; <kbd>Esc</kbd> collapse</small></div></div>
+          <div class="set"><div><b>Quit Mission Control</b><small>You can also quit from the tray icon.</small></div><button class="ghost danger-t" id="btn-quit">Quit</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CLAUDE CHAT ============ -->
+  <section id="chat">
+    <div class="chat-h">
+      <div class="chat-title"><span class="spark">&#10022;</span><b>Claude Code</b><small id="chat-model">PC control</small></div>
+      <div class="tools">
+        <select id="chat-mode" title="Permission mode"><option value="auto">Auto</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan only</option></select>
+        <button class="icon-btn" id="chat-new" title="New conversation">&#10227;</button>
+        <button class="icon-btn" data-open="panel" title="Mission Control">&#9672;</button>
+        <button class="icon-btn" data-open="collapsed" title="Collapse (Esc)">&#8963;</button>
+      </div>
+    </div>
+    <div id="msgs">
+      <div class="empty" id="chat-empty">
+        <p>Tell Claude what to do on this PC.</p>
+        <div class="sugs">
+          <button>What is using most of my RAM?</button>
+          <button>Open my Downloads folder</button>
+          <button>Switch Windows to dark mode</button>
+          <button>Show my IP address and Wi-Fi details</button>
+        </div>
+      </div>
+    </div>
+    <div class="composer">
+      <textarea id="chat-in" rows="1" placeholder="Ask Claude to do something..." spellcheck="false"></textarea>
+      <button id="chat-send" class="send" title="Send (Enter)">&#10148;</button>
+    </div>
+  </section>
+</div>
+
+<!-- The pet lives above the shell so its glow is never clipped -->
+<div id="pet" class="hit calm" title="Click: Mission Control  -  Right-click: Ask Claude">
+  <div class="pet-halo"></div>
+  <div class="pet-orbit"><i></i></div>
+  <div class="pet-float">
+    <div class="fin l"></div><div class="fin r"></div>
+    <div class="pet-body">
+      <div class="visor"><div class="eyes"><i class="eye"></i><i class="eye"></i></div></div>
+      <i class="cheek l"></i><i class="cheek r"></i>
+      <i class="sweat"></i>
+    </div>
+  </div>
+  <div class="zzz"><i>z</i><i>z</i><i>z</i></div>
+</div>
+
+<div id="bubble"></div>
+<div id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
