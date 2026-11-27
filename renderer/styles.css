@@ -94,6 +94,36 @@ button { cursor: pointer; background: none; border: 0; }
 .chip.lim .w b { min-width: 28px; font-weight: 600; }
 .chip.lim .w.warn b { color: var(--amber); }
 .chip.lim .w.crit b { color: var(--red); }
+/* One row per AI provider; with both installed they take turns, sliding up */
+.chip.lim { position: relative; overflow: hidden; }
+.lim-row { position: absolute; inset: 0; display: flex; align-items: center; gap: 7px; padding: 0 9px; opacity: 0; transform: translateY(110%); transition: transform .55s var(--spring), opacity .35s; }
+.lim-row.show { opacity: 1; transform: none; }
+.lim-row.out { opacity: 0; transform: translateY(-110%); }
+.lim-row .wins { display: flex; gap: 8px; }
+.lim-row.codex { --c: var(--green); }
+.chip.lim .hexi { fill: none; stroke: var(--green); }
+.chip.lim.loading .ico { animation: spin 1s linear infinite; }
+
+/* Chat provider switch */
+.prov { display: flex; padding: 2px; margin-right: 6px; border-radius: 9px; background: rgba(255, 255, 255, .04); border: 1px solid var(--line); }
+.prov button { height: 22px; padding: 0 10px; border-radius: 7px; font-size: 10.5px; color: var(--dim); transition: background .3s, color .3s; }
+.prov button:hover { color: var(--text); }
+.prov button.on { background: rgba(255, 140, 90, .18); color: #ffb38a; }
+.prov button.on[data-prov="codex"] { background: rgba(68, 255, 168, .14); color: var(--green); }
+#chat.codex .chat-title .spark { color: var(--green); text-shadow: 0 0 10px rgba(68, 255, 168, .6); }
+#chat.codex .send { background: linear-gradient(135deg, #8dffc9, #2fd88f); }
+#chat.codex .composer:focus-within { border-color: rgba(68, 255, 168, .5); box-shadow: 0 0 20px rgba(68, 255, 168, .1); }
+#chat.codex .typing i { background: var(--green); }
+#chat.codex .tool b { color: var(--green); }
+
+/* No Claude Code and no Codex: hide everything AI, keep stats + pet, and re-centre the notch */
+body.no-ai .ai-only, body.no-ai .side.right { display: none !important; }
+body:not(.has-claude) .claude-only { display: none !important; }
+body.no-ai #shell:not(.mode-panel):not(.mode-chat) { width: 420px; }
+body.no-ai #shell.hover:not(.mode-panel):not(.mode-chat) { width: 440px; }
+body.no-ai #shell:not(.mode-panel):not(.mode-chat) #bar { grid-template-columns: 1fr 62px; }
+body.no-ai #shell:not(.mode-panel):not(.mode-chat) ~ #pet { translate: 165px 0; }
+body.no-ai #shell.hover:not(.mode-panel):not(.mode-chat) ~ #pet { translate: 175px 0; }
 .chip.net .dn em { color: var(--cyan); }
 .chip.net .up em { color: var(--pink); }
 .chip.warn .v { color: var(--amber); }
@@ -130,7 +160,8 @@ button { cursor: pointer; background: none; border: 0; }
 .icon-btn.on { color: var(--cyan); background: rgba(62, 243, 255, .1); }
 
 .pages { position: relative; height: calc(100% - 40px); }
-.page { position: absolute; inset: 0; padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 12px; opacity: 0; transform: translateX(18px); pointer-events: none; transition: opacity .2s, transform .35s var(--ease); }
+/* Pages size to their content; JS animates the shell height to the active page */
+.page { position: absolute; top: 0; left: 0; right: 0; padding: 14px 18px 18px; display: flex; flex-direction: column; gap: 12px; opacity: 0; transform: translateX(18px); pointer-events: none; transition: opacity .2s, transform .35s var(--ease); }
 .page.active { opacity: 1; transform: none; pointer-events: auto; transition: opacity .35s .05s, transform .5s .05s var(--spring); }
 .page.left { transform: translateX(-18px); }
 
@@ -231,6 +262,7 @@ canvas { display: block; width: 100%; }
 .mem-bar { flex: 1; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .06); display: flex; overflow: hidden; }
 .mem-bar i { height: 100%; transition: width .8s var(--ease); }
 .list { flex: 1; overflow-y: auto; overflow-x: hidden; margin-right: -8px; padding-right: 6px; }
+.page[data-page="apps"] .list, .page[data-page="cleaner"] .list { flex: none; max-height: 476px; }
 .sec { position: sticky; top: 0; z-index: 1; padding: 6px 2px; font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); background: linear-gradient(180deg, rgba(8, 13, 25, .98) 70%, transparent); }
 .proc { display: grid; grid-template-columns: 30px 1fr 150px 76px 30px; align-items: center; gap: 10px; height: 44px; padding: 0 8px; border-radius: 10px; transition: background .2s; }
 .proc:hover { background: rgba(255, 255, 255, .035); }
@@ -340,7 +372,7 @@ kbd { display: inline-block; padding: 0 5px; margin: 0 1px; border-radius: 4px; 
 .send.stop { font-size: 0; }
 
 /* ================= PET ================= */
-#pet { position: absolute; top: 2px; left: 50%; width: 46px; height: 44px; margin-left: -23px; z-index: 20; cursor: pointer; transition: transform .5s var(--spring); }
+#pet { position: absolute; top: 2px; left: 50%; width: 46px; height: 44px; margin-left: -23px; z-index: 20; cursor: pointer; translate: 0 0; transition: transform .5s var(--spring), translate .62s var(--spring); }
 #pet:active { transform: scale(.92); }
 .pet-halo { position: absolute; left: 50%; top: 50%; width: 70px; height: 70px; margin: -35px 0 0 -35px; border-radius: 50%; background: radial-gradient(circle, var(--pc) 0%, transparent 62%); opacity: .22; transition: background .8s; pointer-events: none; }
 @keyframes halo { 50% { transform: scale(1.18); opacity: .34; } }
@@ -407,7 +439,7 @@ kbd { display: inline-block; padding: 0 5px; margin: 0 1px; border-radius: 4px; 
 
 /* ================= CONTROLS ================= */
 .page[data-page="controls"] { overflow: hidden; }
-.ctl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; height: 100%; }
+.ctl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .ctl-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .tile {
@@ -453,7 +485,7 @@ kbd { display: inline-block; padding: 0 5px; margin: 0 1px; border-radius: 4px; 
 .m-badge { font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim); }
 .media-card.playing .m-badge { color: var(--cyan); text-shadow: 0 0 8px rgba(62, 243, 255, .6); }
 .m-app { font-size: 10px; color: var(--dim-2); }
-.viz { margin: auto -14px 0; height: 84px; display: flex; align-items: flex-end; gap: 3px; padding: 0 14px; -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+.viz { margin: auto -14px 0; height: 84px; min-height: 60px; flex: 0 1 84px; display: flex; align-items: flex-end; gap: 3px; padding: 0 14px; -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
 .viz i { flex: 1; height: 100%; border-radius: 3px 3px 0 0; transform-origin: bottom; transform: scaleY(.06); background: linear-gradient(0deg, rgba(155, 123, 255, .9), rgba(62, 243, 255, .9)); opacity: .35; transition: transform .6s var(--ease), opacity .4s; }
 /* Visualiser only animates while the Controls tab is actually on screen */
 #shell.mode-panel .page.active .media-card.playing .viz i { opacity: .9; animation: viz var(--d, 1s) ease-in-out var(--dl, 0s) infinite alternate; }
@@ -510,7 +542,7 @@ kbd { display: inline-block; padding: 0 5px; margin: 0 1px; border-radius: 4px; 
 /* quick settings shortcuts */
 .quick-card { flex: 1; display: flex; flex-direction: column; }
 .qs { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.qs button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255, 255, 255, .025); font-size: 10.5px; color: var(--dim); transition: all .3s var(--spring); }
+.qs button { min-height: 54px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255, 255, 255, .025); font-size: 10.5px; color: var(--dim); transition: all .3s var(--spring); }
 .qs button:hover { color: var(--text); border-color: rgba(62, 243, 255, .4); background: rgba(62, 243, 255, .06); transform: translateY(-2px); }
 .qs svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 

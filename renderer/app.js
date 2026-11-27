@@ -69,6 +69,7 @@ function setHover(v) {
 // The window is small while collapsed (cheap to composite) and grows before expanding.
 let shrinkTimer;
 async function setMode(m) {
+  if (m === 'chat' && !state.provider) m = 'panel'; // no Claude Code or Codex installed
   if (m === state.mode) return;
   state.mode = m;
   clearTimeout(shrinkTimer);
@@ -78,6 +79,7 @@ async function setMode(m) {
   const shell = $('#shell');
   shell.classList.remove('mode-panel', 'mode-chat', 'hover');
   if (m !== 'collapsed') shell.classList.add(`mode-${m}`);
+  if (m === 'panel') fitPanel(); else shell.style.height = '';
   if (m !== 'collapsed') { mc.focus(); hideBubble(); }
   if (m === 'chat') setTimeout(() => $('#chat-in').focus(), 350);
   if (m === 'panel') { onTab(state.tab); requestAnimationFrame(moveInk); }
@@ -102,6 +104,22 @@ mc.onBlur(() => { if (state.settings.collapseOnBlur && !state.pinned && !$('#cl-
 mc.onOpen((m) => setMode(m));
 $('#btn-pin').addEventListener('click', () => { state.pinned = !state.pinned; $('#btn-pin').classList.toggle('on', state.pinned); toast(state.pinned ? 'Pinned open' : 'Unpinned'); });
 
+// The panel's height follows the active tab's content (no empty space), animated by the shell's spring transition
+const BAR_H = 46, TABS_H = 40, MAX_PANEL_H = 668;
+function fitPanel() {
+  if (state.mode !== 'panel') return;
+  const page = $(`.page[data-page="${state.tab}"]`);
+  if (!page) return;
+  $('#shell').style.height = `${Math.min(MAX_PANEL_H, BAR_H + TABS_H + Math.ceil(page.offsetHeight))}px`;
+}
+let fitQueued = false;
+const pageObserver = new ResizeObserver(() => {
+  if (fitQueued) return;
+  fitQueued = true;
+  requestAnimationFrame(() => { fitQueued = false; fitPanel(); });
+});
+$$('.page').forEach((p) => pageObserver.observe(p));
+
 // ---------------- tabs ----------------
 function moveInk() {
   const t = $(`.tab[data-tab="${state.tab}"]`), ink = $('.tab-ink');
@@ -121,6 +139,7 @@ $$('.tab').forEach((t) => t.addEventListener('click', () => {
     p.classList.toggle('active', on);
   });
   moveInk();
+  fitPanel();
   onTab(state.tab);
 }));
 function onTab(tab) {
@@ -620,6 +639,8 @@ function applySettings(s) {
   state.settings = s;
   $$('[data-set]').forEach((el) => { if (el.type === 'checkbox') el.checked = !!s[el.dataset.set]; else el.value = s[el.dataset.set]; });
   $('#chat-mode').value = s.chatMode || 'auto';
+  applyAi();
+  renderLimits();
   renderHistory();
   if (s.speedHistory?.[0]) showResult(s.speedHistory[0]);
 }
@@ -684,9 +705,9 @@ function sendChat(text) {
   chat.cur = addMsg('bot', '<div class="typing"><i></i><i></i><i></i></div>');
   chat.seg = null; chat.segText = ''; chat.streamed = false; chat.tools.clear();
   setBusy(true);
-  mc.claudeSend(text, $('#chat-mode').value);
+  mc.aiSend(state.provider, text, $('#chat-mode').value);
 }
-mc.onClaude((e) => {
+mc.onAi((e) => {
   const cur = chat.cur;
   if (e.kind === 'init') { $('#chat-model').textContent = e.model || 'PC control'; return; }
   if (!cur && e.kind !== 'end') return;
@@ -724,7 +745,7 @@ mc.onClaude((e) => {
     meta.textContent = [e.ms ? `${(e.ms / 1000).toFixed(1)}s` : '', e.cost ? `$${e.cost.toFixed(3)}` : ''].filter(Boolean).join(' · ');
     cur.appendChild(meta);
     $$('.tool:not(.done):not(.fail)', cur).forEach((t) => t.classList.add('done'));
-    if (state.mode !== 'chat') say(`Claude: ${(e.text || 'done').replace(/\s+/g, ' ').slice(0, 90)}${(e.text || '').length > 90 ? '...' : ''}`, null, 6000);
+    if (state.mode !== 'chat') say(`${e.provider === 'codex' ? 'Codex' : 'Claude'}: ${(e.text || 'done').replace(/\s+/g, ' ').slice(0, 90)}${(e.text || '').length > 90 ? '...' : ''}`, null, 6000);
     scrollChat();
   } else if (e.kind === 'error') {
     typing?.remove();
@@ -740,16 +761,45 @@ $('#chat-in').addEventListener('input', autosize);
 $('#chat-in').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat($('#chat-in').value); }
 });
-$('#chat-send').addEventListener('click', () => { if (state.claudeBusy) mc.claudeStop(); else sendChat($('#chat-in').value); });
-$('#chat-new').addEventListener('click', () => {
-  mc.claudeNew();
+$('#chat-send').addEventListener('click', () => { if (state.claudeBusy) mc.aiStop(); else sendChat($('#chat-in').value); });
+function newChat(text = 'New conversation. What should I do?') {
+  mc.aiNew();
   $('#msgs').innerHTML = '';
   const empty = document.createElement('div');
   empty.className = 'empty'; empty.id = 'chat-empty';
-  empty.innerHTML = '<p>New conversation. What should I do?</p>';
+  empty.innerHTML = `<p>${esc(text)}</p>`;
   $('#msgs').appendChild(empty);
   setBusy(false);
+}
+$('#chat-new').addEventListener('click', () => newChat());
+// Switch between Claude Code and Codex (only shown when both are installed)
+$('#chat-prov').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-prov]');
+  if (!b || b.dataset.prov === state.provider) return;
+  if (state.claudeBusy) { toast('Wait for the current reply to finish'); return; }
+  applySettings(await mc.setSetting('chatProvider', b.dataset.prov));
+  newChat(`Now chatting with ${b.dataset.prov === 'codex' ? 'Codex' : 'Claude Code'}. What should I do?`);
 });
+
+// Which AI CLIs exist decides what the widget shows: chat, provider switch, usage chip
+function applyAi() {
+  const ai = state.settings.ai || {};
+  const list = ['claude', 'codex'].filter((p) => ai[p]);
+  document.body.classList.toggle('no-ai', !list.length);
+  document.body.classList.toggle('has-claude', !!ai.claude);
+  const pref = state.settings.chatProvider;
+  const prev = state.provider;
+  state.provider = list.includes(pref) ? pref : list[0] || null;
+  $('#chat-prov').style.display = list.length > 1 ? '' : 'none';
+  $$('#chat-prov button').forEach((b) => b.classList.toggle('on', b.dataset.prov === state.provider));
+  const short = state.provider === 'codex' ? 'Codex' : 'Claude';
+  $('#chat-name').textContent = state.provider === 'codex' ? 'Codex' : 'Claude Code';
+  $('#q-ask').textContent = `Ask ${short}`;
+  $$('.ai-name').forEach((n) => { n.textContent = short; });
+  $('#chat').classList.toggle('codex', state.provider === 'codex');
+  if (prev !== state.provider) $('#chat-model').textContent = 'PC control';
+  if (!list.length && state.mode === 'chat') setMode('collapsed');
+}
 $('.sugs').addEventListener('click', (e) => { if (e.target.tagName === 'BUTTON') sendChat(e.target.textContent); });
 
 // ---------------- system controls (Controls tab) ----------------
@@ -1109,35 +1159,62 @@ $('#pet').addEventListener('wheel', async (e) => {
   wheelBusy = false;
 }, { passive: false });
 
-// ---------------- Claude plan limits (5-hour + weekly) ----------------
-let limits = null;
+// ---------------- AI plan limits (Claude Code + Codex) ----------------
+// limits = { claude: { windows: [{ label, pct, resetsAt }], at }, codex: { windows, plan, at } }
+let limits = null, limShown = null;
+const PROV_NAME = { claude: 'Claude Code', codex: 'Codex' };
+const provList = () => ['claude', 'codex'].filter((p) => state.settings.ai?.[p]);
 function fmtReset(ms) {
   const d = new Date(ms), now = new Date();
   const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   if (d.toDateString() === now.toDateString()) return `today ${time}`;
+  if (ms - now > 6 * 86400000) return d.toLocaleDateString([], { day: 'numeric', month: 'short' });
   return `${d.toLocaleDateString([], { weekday: 'short' })} ${time}`;
 }
 function renderLimits() {
-  const chip = $('#c-lim');
-  const now = Date.now();
-  const lines = [];
-  for (const [key, id, label] of [['fiveHour', '#lim-5h', '5-hour'], ['sevenDay', '#lim-7d', 'Weekly']]) {
-    const w = limits?.[key];
-    const el = $(id);
-    // A window whose reset time has passed is back to 0%
-    const pct = !w ? null : w.resetsAt && w.resetsAt < now ? 0 : w.pct;
-    el.querySelector('b').textContent = pct == null ? '--' : `${Math.round(pct)}%`;
-    el.classList.toggle('warn', pct >= 75 && pct < 90);
-    el.classList.toggle('crit', pct >= 90);
-    if (w) lines.push(`${label}: ${Math.round(pct)}% used${w.resetsAt > now ? ` · resets ${fmtReset(w.resetsAt)}` : ' · reset'}`);
+  const now = Date.now(), lines = [], provs = provList();
+  for (const p of ['claude', 'codex']) {
+    const row = $(`#c-lim .lim-row[data-p="${p}"]`);
+    row.style.display = provs.includes(p) ? '' : 'none';
+    const L = limits?.[p];
+    const wins = (L?.windows?.length ? L.windows : [{ label: '5h' }, { label: '7d' }]).slice(0, 2);
+    row.querySelector('.wins').innerHTML = wins.map((w) => {
+      // A window whose reset time has passed is back to 0%
+      const pct = w.pct == null ? null : w.resetsAt && w.resetsAt < now ? 0 : w.pct;
+      const cls = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : '';
+      return `<span class="w ${cls}"><small>${esc(w.label)}</small><b>${pct == null ? '--' : `${Math.round(pct)}%`}</b></span>`;
+    }).join('');
+    if (!provs.includes(p) || !L?.windows) continue;
+    lines.push(`${PROV_NAME[p]}${L.plan ? ` (${L.plan} plan)` : ''}`);
+    for (const w of L.windows) {
+      const pct = w.resetsAt && w.resetsAt < now ? 0 : w.pct;
+      lines.push(`   ${w.label}: ${Math.round(pct)}% used${w.resetsAt > now ? ` · resets ${fmtReset(w.resetsAt)}` : ''}`);
+      if (pct >= 90 && w.resetsAt > now) say(`${PROV_NAME[p]} ${w.label} limit at ${Math.round(pct)}%. Resets ${fmtReset(w.resetsAt)}.`, `lim-${p}-${w.label}`, 6000, 30 * 60000);
+    }
   }
-  if (limits?.at) lines.push(`Checked ${new Date(limits.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
-  chip.title = `Claude Code usage\n${lines.join('\n') || 'No data yet'}\nClick to refresh`;
-  const five = limits?.fiveHour;
-  if (five && five.resetsAt > now && five.pct >= 90) say(`Claude 5-hour limit at ${Math.round(five.pct)}%. Resets ${fmtReset(five.resetsAt)}.`, 'lim5', 6000, 30 * 60000);
+  $('#c-lim').title = `AI usage\n${lines.join('\n') || 'No data yet'}\nClick to refresh`;
+  if (!provs.includes(limShown)) showLimRow(provs[0], false);
 }
+function showLimRow(p, animate = true) {
+  if (!p) return;
+  const prev = limShown && $(`#c-lim .lim-row[data-p="${limShown}"]`);
+  const next = $(`#c-lim .lim-row[data-p="${p}"]`);
+  limShown = p;
+  if (prev && prev !== next) {
+    prev.classList.remove('show');
+    if (animate) { prev.classList.add('out'); setTimeout(() => prev.classList.remove('out'), 600); }
+  }
+  next.classList.remove('out');
+  next.classList.add('show');
+}
+// With both installed, the chip alternates between Claude and Codex every 6 s
+setInterval(() => {
+  const provs = provList();
+  if (provs.length < 2 || document.hidden) return;
+  showLimRow(provs[(provs.indexOf(limShown) + 1) % provs.length]);
+}, 6000);
 mc.onLimits((l) => { $('#c-lim').classList.remove('loading'); if (l) limits = l; renderLimits(); });
-$('#c-lim').addEventListener('click', () => { $('#c-lim').classList.add('loading'); mc.refreshLimits(); });
+$('#c-lim').addEventListener('click', () => { $('#c-lim').classList.add('loading'); mc.refreshLimits(); setTimeout(() => $('#c-lim').classList.remove('loading'), 25000); });
 setInterval(renderLimits, 60000);
 
 // ---------------- clock ----------------
@@ -1154,9 +1231,9 @@ mc.onIdle((idle) => { if (idle) { setMode('collapsed'); hideBubble(); } });
 (async () => {
   state.static = await mc.getStatic();
   applySettings(await mc.getSettings());
-  if (!state.settings.claudeFound) $('#chat-model').textContent = 'CLI not found';
   limits = await mc.getLimits();
   renderLimits();
   pet.refresh();
-  setTimeout(() => say('Hi! Click me for Mission Control, right-click to ask Claude.', 'hello', 5000, 1e12), 900);
+  const greet = state.provider ? `Hi! Click me for Mission Control, right-click to ask ${state.provider === 'codex' ? 'Codex' : 'Claude'}.` : 'Hi! Click me for Mission Control. Scroll on me to change the volume.';
+  setTimeout(() => say(greet, 'hello', 5000, 1e12), 900);
 })();

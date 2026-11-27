@@ -15,6 +15,7 @@ if (!app.requestSingleInstanceLock()) {
   const cleaner = require('./src/cleaner');
   const procs = require('./src/processes');
   const ClaudeBridge = require('./src/claude');
+  const CodexBridge = require('./src/codex');
   const SysControl = require('./src/syscontrol');
   const sys = new SysControl();
 
@@ -23,6 +24,12 @@ if (!app.requestSingleInstanceLock()) {
   const stats = new Stats();
   const netmon = new NetMon();
   const claude = new ClaudeBridge();
+  const codex = new CodexBridge();
+  // Which AI CLIs are installed decides whether the chat and the usage chip exist at all
+  if (process.env.MC_NO_AI) { claude.exe = null; codex.exe = null; } // dev: preview the no-AI layout
+  const aiAvailable = () => ({ claude: !!claude.exe, codex: !!codex.exe });
+  const anyAi = () => !!(claude.exe || codex.exe);
+  const bridgeFor = (p) => (p === 'codex' ? codex : claude);
 
   const send = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send(ch, data); };
 
@@ -158,7 +165,7 @@ if (!app.requestSingleInstanceLock()) {
     tray.setToolTip(idle ? 'Mission Control (idle: fullscreen app)' : 'Mission Control');
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Open Mission Control', accelerator: 'Ctrl+Alt+M', click: () => openMode('panel') },
-      { label: 'Ask Claude', accelerator: 'Ctrl+Alt+Space', click: () => openMode('chat') },
+      { label: claude.exe ? 'Ask Claude' : 'Ask Codex', accelerator: 'Ctrl+Alt+Space', visible: anyAi(), click: () => openMode('chat') },
       { type: 'separator' },
       { label: 'Launch at startup', type: 'checkbox', checked: !!settings.openAtLogin, click: (m) => setSetting('openAtLogin', m.checked) },
       { label: 'Idle when an app is fullscreen', type: 'checkbox', checked: !!settings.idleOnFullscreen, click: (m) => setSetting('idleOnFullscreen', m.checked) },
@@ -170,6 +177,7 @@ if (!app.requestSingleInstanceLock()) {
 
   function openMode(mode) {
     if (idle) return;
+    if (mode === 'chat' && !anyAi()) mode = 'panel'; // no Claude Code or Codex installed: no chat
     win.showInactive();
     win.focus();
     send('ui:open', mode);
@@ -182,7 +190,7 @@ if (!app.requestSingleInstanceLock()) {
     send('settings', publicSettings());
     updateTray();
   }
-  const publicSettings = () => ({ ...settings, claudeFound: !!claude.exe });
+  const publicSettings = () => ({ ...settings, claudeFound: !!claude.exe, ai: aiAvailable() });
 
   // ---- IPC ----
   ipcMain.on('mouse:interactive', (_e, on) => { if (win) win.setIgnoreMouseEvents(!on, { forward: true }); });
@@ -208,9 +216,9 @@ if (!app.requestSingleInstanceLock()) {
     Settings.save(settings);
     return r;
   });
-  ipcMain.on('claude:send', (_e, prompt, mode) => claude.send(prompt, mode || settings.chatMode));
-  ipcMain.on('claude:stop', () => claude.stop());
-  ipcMain.on('claude:new', () => claude.reset());
+  ipcMain.on('ai:send', (_e, provider, prompt, mode) => bridgeFor(provider).send(prompt, mode || settings.chatMode));
+  ipcMain.on('ai:stop', () => { claude.stop(); codex.stop(); });
+  ipcMain.on('ai:new', () => { claude.reset(); codex.reset(); });
   ipcMain.on('app:quit', () => app.quit());
 
   // ---- System controls ----
@@ -231,27 +239,47 @@ if (!app.requestSingleInstanceLock()) {
 
   stats.on('stats', (s) => send('stats', s));
   netmon.on('live', (l) => send('latency', l));
-  claude.on('event', (e) => send('claude', e));
+  claude.on('event', (e) => send('ai', { ...e, provider: 'claude' }));
+  codex.on('event', (e) => send('ai', { ...e, provider: 'codex' }));
 
-  // ---- Claude plan limits (5-hour + weekly) ----
-  // Updated for free by every widget chat turn. The auto probe only runs while a 5-hour window is
-  // already open, so the widget never starts a new usage window on its own.
+  // ---- AI plan limits: Claude (5-hour + weekly) and Codex (whatever windows the plan has) ----
+  // Both are sent as { windows: [{ label, pct, resetsAt }], at } so the UI treats them alike.
+  const claudeWindows = (l) => (!l ? null : {
+    windows: [l.fiveHour && { label: '5h', ...l.fiveHour }, l.sevenDay && { label: '7d', ...l.sevenDay }].filter(Boolean),
+    at: l.at,
+  });
+  const allLimits = () => ({
+    claude: claude.exe ? claudeWindows(settings.claudeLimits) : null,
+    codex: codex.exe ? settings.codexLimits || null : null,
+  });
+  const sendLimits = () => send('limits', allLimits());
+  // Claude: updated for free by every widget chat turn. The auto probe only runs while a 5-hour window
+  // is already open, so the widget never starts a new usage window on its own.
   claude.on('limits', (l) => {
     if (l) {
       const prev = settings.claudeLimits || {};
       settings.claudeLimits = { ...prev, ...Object.fromEntries(Object.entries(l).filter(([, v]) => v != null)) };
       Settings.save(settings);
     }
-    send('limits', settings.claudeLimits);
+    sendLimits();
   });
+  // Codex: read through app-server, which costs no usage, so it can refresh freely.
+  async function refreshCodexLimits() {
+    if (!codex.exe || idle) return;
+    const l = await codex.readLimits();
+    if (l) { settings.codexLimits = l; Settings.save(settings); }
+    sendLimits();
+  }
+  codex.on('turn-finished', () => setTimeout(refreshCodexLimits, 1500));
   const windowOpen = () => (settings.claudeLimits?.fiveHour?.resetsAt || 0) > Date.now();
   function autoProbe() {
-    if (idle || !settings.autoLimits || claude.busy) return;
-    if (!settings.claudeLimits || windowOpen()) claude.probeLimits();
+    if (idle) return;
+    if (claude.exe && settings.autoLimits && !claude.busy && (!settings.claudeLimits || windowOpen())) claude.probeLimits();
   }
   setInterval(autoProbe, 10 * 60 * 1000);
-  ipcMain.handle('limits:get', () => settings.claudeLimits);
-  ipcMain.on('limits:refresh', () => claude.probeLimits());
+  setInterval(refreshCodexLimits, 5 * 60 * 1000);
+  ipcMain.handle('limits:get', () => allLimits());
+  ipcMain.on('limits:refresh', () => { if (claude.exe) claude.probeLimits(); refreshCodexLimits(); });
 
   app.on('second-instance', () => openMode('panel'));
 
@@ -275,6 +303,7 @@ if (!app.requestSingleInstanceLock()) {
     setInterval(() => { if (!idle) send('user-idle', powerMonitor.getSystemIdleTime()); }, 5000);
     startWork();
     setTimeout(autoProbe, 8000);
+    setTimeout(refreshCodexLimits, 6000);
     if (process.env.MC_SHOTS) devShots(process.env.MC_SHOTS);
     if (process.env.MC_DIAG) setInterval(async () => {
       const r = await win.webContents.executeJavaScript("JSON.stringify(document.getAnimations().map(a => (a.animationName || a.transitionProperty) + '@' + (a.effect.target.id || a.effect.target.className)))");
@@ -317,6 +346,6 @@ if (!app.requestSingleInstanceLock()) {
     fs.writeFileSync(path.join(dir, 'done.txt'), 'ok');
   }
 
-  app.on('will-quit', () => { globalShortcut.unregisterAll(); stopWork(); claude.stop(); sys.stop(); });
+  app.on('will-quit', () => { globalShortcut.unregisterAll(); stopWork(); claude.stop(); codex.stop(); sys.stop(); });
   app.on('window-all-closed', () => app.quit());
 }

@@ -26,17 +26,22 @@
     </div>
     <div class="side right">
       <div class="chip net" id="c-net" title="Live download / upload"><span class="dn"><em>&#8595;</em><span>--</span></span><span class="up"><em>&#8593;</em><span>--</span></span></div>
-      <div class="chip lim" id="c-lim" title="Claude Code usage. Click to refresh.">
-        <svg class="ico spark" viewBox="0 0 24 24"><path d="M12 2.5l2.1 6.6 6.9 2.4-6.9 2.4L12 20.5l-2.1-6.6L3 11.5l6.9-2.4z"/></svg>
-        <span class="w" id="lim-5h"><small>5h</small><b>--</b></span>
-        <span class="w" id="lim-7d"><small>7d</small><b>--</b></span>
+      <div class="chip lim" id="c-lim" title="AI usage. Click to refresh.">
+        <div class="lim-row claude show" data-p="claude">
+          <svg class="ico spark" viewBox="0 0 24 24"><path d="M12 2.5l2.1 6.6 6.9 2.4-6.9 2.4L12 20.5l-2.1-6.6L3 11.5l6.9-2.4z"/></svg>
+          <span class="wins"><span class="w"><small>5h</small><b>--</b></span><span class="w"><small>7d</small><b>--</b></span></span>
+        </div>
+        <div class="lim-row codex" data-p="codex">
+          <svg class="ico hexi" viewBox="0 0 24 24"><path d="M12 2.8l8 4.6v9.2l-8 4.6-8-4.6V7.4z"/><path d="M9 10l-2 2 2 2M15 10l2 2-2 2"/></svg>
+          <span class="wins"><span class="w"><small>5h</small><b>--</b></span><span class="w"><small>7d</small><b>--</b></span></span>
+        </div>
       </div>
     </div>
   </header>
 
   <div id="quick">
     <button class="qbtn" data-open="panel"><span class="ico">&#9672;</span>Mission Control</button>
-    <button class="qbtn claude" data-open="chat"><span class="ico">&#10022;</span>Ask Claude</button>
+    <button class="qbtn claude ai-only" data-open="chat"><span class="ico">&#10022;</span><span id="q-ask">Ask Claude</span></button>
   </div>
 
   <!-- ============ MISSION CONTROL PANEL ============ -->
@@ -54,7 +59,7 @@
       <div class="tools">
         <span id="clock">--:--</span>
         <button class="icon-btn" id="btn-pin" title="Keep open when clicking away">&#9906;</button>
-        <button class="icon-btn" data-open="chat" title="Ask Claude (Ctrl+Alt+Space)">&#10022;</button>
+        <button class="icon-btn ai-only" data-open="chat" title="Ask AI (Ctrl+Alt+Space)">&#10022;</button>
         <button class="icon-btn" data-open="collapsed" title="Collapse (Esc)">&#8963;</button>
       </div>
     </nav>
@@ -258,10 +263,10 @@
           <label class="set"><div><b>Launch at startup</b><small>Start Mission Control when you sign in to Windows.</small></div><input type="checkbox" data-set="openAtLogin"><i class="sw"></i></label>
           <label class="set"><div><b>Idle during fullscreen</b><small>Hide and stop all sampling while a game or video is fullscreen.</small></div><input type="checkbox" data-set="idleOnFullscreen"><i class="sw"></i></label>
           <label class="set"><div><b>Collapse when clicking away</b><small>Fold back into the notch when another window gets focus.</small></div><input type="checkbox" data-set="collapseOnBlur"><i class="sw"></i></label>
-          <label class="set"><div><b>Auto-refresh Claude limits</b><small>Every 10 min while a 5-hour window is open, using a tiny Haiku request. Chat replies always update them.</small></div><input type="checkbox" data-set="autoLimits"><i class="sw"></i></label>
-          <div class="set"><div><b>Claude permission mode</b><small>Auto: Claude runs safe actions itself and is blocked from risky ones. Plan: read-only.</small></div>
+          <label class="set claude-only"><div><b>Auto-refresh Claude limits</b><small>Every 10 min while a 5-hour window is open, using a tiny Haiku request. Chat replies always update them.</small></div><input type="checkbox" data-set="autoLimits"><i class="sw"></i></label>
+          <div class="set ai-only"><div><b>AI permission mode</b><small>Claude: Auto runs safe actions itself and blocks risky ones. Codex: Auto and Accept edits use its workspace-write sandbox. Plan is read-only for both.</small></div>
             <select data-set="chatMode"><option value="auto">Auto</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan (read-only)</option></select></div>
-          <div class="set"><div><b>Shortcuts</b><small><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>M</kbd> Mission Control &nbsp; <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Space</kbd> Ask Claude &nbsp; <kbd>Esc</kbd> collapse</small></div></div>
+          <div class="set"><div><b>Shortcuts</b><small><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>M</kbd> Mission Control &nbsp; <span class="ai-only"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Space</kbd> Ask AI &nbsp;</span> <kbd>Esc</kbd> collapse</small></div></div>
           <div class="set"><div><b>Quit Mission Control</b><small>You can also quit from the tray icon.</small></div><button class="ghost danger-t" id="btn-quit">Quit</button></div>
         </div>
       </div>
@@ -271,8 +276,9 @@
   <!-- ============ CLAUDE CHAT ============ -->
   <section id="chat">
     <div class="chat-h">
-      <div class="chat-title"><span class="spark">&#10022;</span><b>Claude Code</b><small id="chat-model">PC control</small></div>
+      <div class="chat-title"><span class="spark">&#10022;</span><b id="chat-name">Claude Code</b><small id="chat-model">PC control</small></div>
       <div class="tools">
+        <div class="prov" id="chat-prov"><button data-prov="claude">Claude</button><button data-prov="codex">Codex</button></div>
         <select id="chat-mode" title="Permission mode"><option value="auto">Auto</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan only</option></select>
         <button class="icon-btn" id="chat-new" title="New conversation">&#10227;</button>
         <button class="icon-btn" data-open="panel" title="Mission Control">&#9672;</button>
@@ -281,7 +287,7 @@
     </div>
     <div id="msgs">
       <div class="empty" id="chat-empty">
-        <p>Tell Claude what to do on this PC.</p>
+        <p>Tell <span class="ai-name">Claude</span> what to do on this PC.</p>
         <div class="sugs">
           <button>What is using most of my RAM?</button>
           <button>Open my Downloads folder</button>

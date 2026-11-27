@@ -88,8 +88,10 @@ class NetMon extends EventEmitter {
       }
 
       // 2) Download: 6 parallel streams for 10 s
+      // 10 MB chunks: the server can stall on very large single requests
       const download = await this.measure('download', 10000, 6, async (signal, add) => {
-        const r = await fetch(`https://speed.cloudflare.com/__down?bytes=50000000&r=${Math.random()}`, { signal, cache: 'no-store' });
+        const r = await fetch(`https://speed.cloudflare.com/__down?bytes=10000000&r=${Math.random()}`, { signal, cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const reader = r.body.getReader();
         for (;;) { const { done, value } = await reader.read(); if (done) break; add(value.byteLength); }
       }, progress);
@@ -97,9 +99,13 @@ class NetMon extends EventEmitter {
       // 3) Upload: 4 parallel streams of 1 MB posts for 8 s
       const chunk = crypto.randomBytes(1 << 20);
       const upload = await this.measure('upload', 8000, 4, async (signal, add) => {
-        await fetch('https://speed.cloudflare.com/__up', { method: 'POST', body: chunk, signal, headers: { 'Content-Type': 'application/octet-stream' } });
+        const r = await fetch('https://speed.cloudflare.com/__up', { method: 'POST', body: chunk, signal, headers: { 'Content-Type': 'application/octet-stream' } });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         add(chunk.length);
       }, progress);
+      // A phase that moved no data at all failed; don't record it as "0 Mbps"
+      if (!download) throw new Error('The download test got no data from the server. Try again in a minute.');
+      if (!upload) throw new Error('The upload test could not reach the server. Try again in a minute.');
 
       const result = {
         t: Date.now(),

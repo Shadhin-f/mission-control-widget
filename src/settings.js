@@ -9,6 +9,8 @@ const DEFAULTS = {
   collapseOnBlur: true,
   autoLimits: true,
   claudeLimits: null,
+  codexLimits: null,
+  chatProvider: 'auto',
   speedHistory: [],
 };
 

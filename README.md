@@ -1,15 +1,18 @@
 # Mission Control
 
 A futuristic system widget for Windows that hangs from the top-center of your screen like a notch,
-with an animated robot pet, live PC stats, internet speed tests, a cache cleaner, and a built-in
-[Claude Code](https://claude.com/claude-code) chat that can control your PC.
+with an animated robot pet, live PC stats, device controls, internet speed tests, a cache cleaner,
+and a built-in AI chat that can control your PC through
+[Claude Code](https://claude.com/claude-code) or the OpenAI Codex CLI, whichever you have.
 
 ![The notch](docs/screenshots/notch.png)
 
 ## Features
 
-- **Always-on notch**: CPU, GPU and RAM on the left, live download/upload speed and your Claude Code
-  usage limits (5-hour and weekly) on the right, with an animated pet in the middle.
+- **Always-on notch**: CPU, GPU and RAM on the left, live download/upload speed and your AI usage
+  limits on the right (Claude Code 5-hour and weekly; Codex windows as your plan reports them). With
+  both installed, the usage chip alternates between them. With neither installed, the right side and
+  the chat disappear and the notch re-centres around the stats and the pet.
 - **Animated pet**: its eyes follow your cursor and it blinks. It is happy when you hover over it,
   sweats and turns red when CPU or RAM is maxed out, spins an orbit ring while Claude works, gets
   excited during speed tests and falls asleep when you're away. It also shows speech bubbles for
@@ -35,9 +38,9 @@ with an animated robot pet, live PC stats, internet speed tests, a cache cleaner
     Recycle Bin, then deletes what you select after you confirm.
   - **Settings**: launch at startup, idle during fullscreen, collapse on click-away, Claude
     permission mode, and auto-refresh of Claude limits.
-- **Claude Code chat** (right-click the pet): ask Claude to open apps, find files, change settings,
-  explain what is using your RAM, and so on. Replies stream live, and every command Claude runs
-  shows as a chip.
+- **AI chat** (right-click the pet): ask Claude Code or Codex to open apps, find files, change
+  settings, explain what is using your RAM, and so on. Every command the AI runs shows as a chip.
+  With both installed, switch between them in the chat header.
 - **Energy friendly**: while any app is fullscreen (games, videos, presentations) the widget hides
   and stops all sampling. When folded up, the window shrinks to just the notch and the pet animates
   only in short bursts.
@@ -58,8 +61,9 @@ with an animated robot pet, live PC stats, internet speed tests, a cache cleaner
 - **Node.js 18+** and npm.
 - **Optional:** an **NVIDIA GPU** with `nvidia-smi` (it ships with the driver) for GPU / VRAM /
   temperature stats. Other GPUs show "No NVIDIA data".
-- **Optional:** the **Claude Code CLI**, installed and signed in, for the chat and usage limits
-  (see [Claude Code](https://claude.com/claude-code)). Everything else works without it.
+- **Optional:** the **Claude Code CLI** and/or the **OpenAI Codex CLI**, installed and signed in,
+  for the chat and usage limits. Codex is found on `PATH`, in npm's global folder, or bundled inside
+  the OpenAI extension for VS Code, Cursor or Windsurf. Everything else works without either.
 
 ## Install and run
 
@@ -123,6 +127,17 @@ Choose the permission mode in the chat header or in Settings:
 
 Claude is told to describe any destructive action and wait for your confirmation in the chat first.
 
+### Codex chat and limits
+
+- Chat runs `codex exec --json` in your home folder and continues the conversation with
+  `codex exec resume`. Auto and Accept edits use Codex's `workspace-write` sandbox; Plan uses
+  `read-only`.
+- If the model in `~/.codex/config.toml` isn't available on your account, the widget picks the
+  first model Codex lists for you. Your config file is never changed.
+- Limits come from `codex app-server` (`account/rateLimits/read`), which costs no usage, so they
+  refresh every 5 minutes and after every Codex reply. The chip shows the windows your plan has: 5h
+  and 7d on paid plans, or a single 30d window on the free plan.
+
 ### Claude usage limits (5h / 7d)
 
 The right-hand chip shows how much of your Claude plan's **5-hour** and **weekly** limits you have
@@ -144,6 +159,7 @@ Mission Control has no telemetry, accounts or analytics. It only makes these net
 | Latency / packet-loss monitor | ICMP echo to `1.1.1.1` (TCP 443 fallback) | Every 3 s while visible |
 | Speed test | `speed.cloudflare.com` | Only when you press **Run speed test** |
 | Claude chat and usage limits | Through your local Claude Code CLI | When you chat, refresh, or auto-refresh is on |
+| Codex chat and usage limits | Through your local Codex CLI | When you chat, and every 5 min for limits |
 
 Settings (including speed-test history and the last known Claude limits) are stored only on your
 PC in `%APPDATA%\Mission Control\settings.json`.
@@ -161,6 +177,7 @@ src/network.js       Live latency monitor + Cloudflare speed test
 src/processes.js     tasklist + window enumeration, end task
 src/cleaner.js       Cache / junk scanner and cleaner
 src/claude.js        Claude Code CLI bridge (chat streaming + usage limits)
+src/codex.js         Codex CLI bridge (detection, chat + resume, app-server usage limits)
 src/syscontrol.js    Controls tab backend: drives sysctl.ps1, netsh (Wi-Fi), powercfg
 src/sysctl.ps1       Long-lived helper (started on first use, stops when idle): Core Audio,
                      Wi-Fi/Bluetooth radios, paired devices, media session, DDC/CI
@@ -186,6 +203,10 @@ variables:
 - `MC_SHOTS=<folder>` renders every view to PNG files in that folder (used for the screenshots
   above). `MC_TABS=overview,network` limits which tabs are captured.
 - `MC_DIAG=1` logs running CSS animations, which helps keep idle GPU use low.
+- `MC_NO_AI=1` pretends neither Claude Code nor Codex is installed, to preview that layout.
+
+Dev runs with these variables never touch the startup task, so a test copy can't take over
+launch-at-sign-in from your real install.
 
 ## Contributing
 
