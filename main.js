@@ -1,5 +1,6 @@
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, globalShortcut, powerMonitor } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, globalShortcut, powerMonitor, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 
 const W = 800, H = 700;
 
@@ -22,10 +23,29 @@ if (!app.requestSingleInstanceLock()) {
 
   const send = (ch, data) => { if (win && !win.isDestroyed()) win.webContents.send(ch, data); };
 
+  // Launch at sign-in through a Startup-folder shortcut. A Run-key command longer than 260 characters
+  // (easy when the project sits in a deep folder) is silently skipped by Windows; shortcuts have no such limit.
   function applyLoginItem() {
-    const opts = { openAtLogin: !!settings.openAtLogin, name: 'Mission Control' };
-    if (!app.isPackaged) { opts.path = process.execPath; opts.args = [path.resolve(app.getAppPath())]; }
-    app.setLoginItemSettings(opts);
+    const appDir = path.resolve(app.getAppPath());
+    const lnk = path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'Mission Control.lnk');
+    // Remove the Run-key entry older versions created
+    app.setLoginItemSettings({ openAtLogin: false, name: 'Mission Control', path: process.execPath, args: app.isPackaged ? [] : [appDir] });
+    try {
+      if (settings.openAtLogin) {
+        shell.writeShortcutLink(lnk, fs.existsSync(lnk) ? 'replace' : 'create', {
+          target: process.execPath,
+          args: app.isPackaged ? '' : `"${appDir}"`,
+          cwd: appDir,
+          description: 'Mission Control widget',
+          icon: process.execPath,
+          iconIndex: 0,
+        });
+      } else if (fs.existsSync(lnk)) {
+        fs.unlinkSync(lnk);
+      }
+    } catch (e) {
+      console.error('Could not update the startup shortcut:', e);
+    }
   }
 
   // Small while collapsed (only the notch, bubble and toast) so idle compositing stays cheap.

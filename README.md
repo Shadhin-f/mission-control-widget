@@ -63,9 +63,10 @@ npm start
 
 The notch appears at the top-center of your main display, and a tray icon appears next to the clock.
 
-On first launch, Mission Control registers itself to **start when you sign in to Windows**. You can
-turn this off in **Settings → Launch at startup** or from the tray menu. If you move the folder,
-launch it once from the new place and the startup entry updates itself.
+On first launch, Mission Control adds a shortcut to your Startup folder
+(`shell:startup`) so it **starts when you sign in to Windows**. You can turn this off in
+**Settings → Launch at startup** or from the tray menu. If you move the folder, launch it once from
+the new place and the shortcut updates itself.
 
 ### Troubleshooting
 
