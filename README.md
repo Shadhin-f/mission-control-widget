@@ -79,6 +79,7 @@ and a built-in AI chat that can control your PC through
 
 - [Windows](#windows)
 - [macOS](#macos-quick-start)
+- [Rust edition (Windows and macOS)](#rust-edition-windows-and-macos): the same widget as a 5 MB native app
 
 ### Windows
 
@@ -200,6 +201,135 @@ If you already deleted the folder without step 1, remove the startup entry by ha
 - **macOS:** run `rm ~/Library/LaunchAgents/com.missioncontrol.widget.plist`, or remove it from
   **Login Items** if you used the packaged app.
 
+### Rust edition (Windows and macOS)
+
+The [`rust/`](rust/README.md) folder builds the same widget with [Tauri](https://tauri.app): the
+interface is identical, but everything behind it is Rust, and it uses the system's own web view
+instead of bundling Chromium. The result is a **~5 MB app** instead of ~300 MB. It reads and writes
+the same settings file as the Electron edition, so you can switch between them freely. Run only
+one edition at a time, because both sit in the same spot at the top of the screen.
+
+> **Status:** fully tested on Windows 11. The macOS build compiles and is built by CI, but has not
+> been run on a Mac yet. Reports are welcome.
+
+#### Windows
+
+**1. Install the prerequisites** (once). In PowerShell:
+
+```powershell
+winget install Rustlang.Rustup
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended --passive --wait"
+winget install OpenJS.NodeJS.LTS
+```
+
+- **Rust** (via rustup) compiles the app. Accept the default `x86_64-pc-windows-msvc` toolchain.
+- **Visual Studio Build Tools** with **Desktop development with C++** provide the linker and the
+  Windows SDK. If you already have Visual Studio with that workload, skip this line.
+- **Node.js 18+** is only used to run the Tauri command-line tool.
+- **WebView2** is built into Windows 11. On Windows 10, install the
+  [Evergreen runtime](https://developer.microsoft.com/microsoft-edge/webview2/) if it's missing.
+
+Open a **new** terminal afterwards so `cargo` is on your `PATH`.
+
+*Low on space on C:?* Rust's toolchain and download cache take about 1.5 GB. To keep them on
+another drive, set these **before** installing rustup (the folders can be anywhere):
+
+```powershell
+[Environment]::SetEnvironmentVariable('RUSTUP_HOME', 'D:\Dev\rustup', 'User')
+[Environment]::SetEnvironmentVariable('CARGO_HOME', 'D:\Dev\cargo', 'User')
+```
+
+The build output (several GB) always goes inside the project folder, in `rust\src-tauri\target`.
+
+**2. Get it and run it:**
+
+```powershell
+git clone https://github.com/Shadhin-f/mission-control-widget.git
+cd mission-control-widget\rust
+npm install
+npm run dev
+```
+
+The first build compiles a few hundred crates and takes several minutes; later runs take seconds.
+`npm run dev` rebuilds and restarts the widget when you change the Rust code.
+
+**3. Build the app you keep:**
+
+```powershell
+npm run build
+```
+
+This creates:
+
+- `src-tauri\target\release\mission-control.exe`: the app itself, which you can run directly
+- `src-tauri\target\release\bundle\nsis\Mission Control_1.0.0_x64-setup.exe`: an installer that
+  adds it to the Start menu (no admin rights needed)
+
+**Launch at startup** uses the same **Mission Control** Task Scheduler task as the Electron
+edition, so whichever edition last had the setting on starts at sign-in.
+
+**Windows troubleshooting**
+
+- **``linker `link.exe` not found``.** The Visual Studio Build Tools or their C++ workload are
+  missing. Install them (step 1), then open a new terminal.
+- **`cargo` is not recognized.** Open a new terminal after installing rustup, or sign out and in.
+- **The widget doesn't appear.** Check that the WebView2 runtime is installed, and that the
+  Electron edition isn't already running in the same spot.
+
+#### macOS
+
+**1. Install the prerequisites** (once):
+
+```bash
+xcode-select --install                                           # compilers + Swift for the helper
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust (choose the default install)
+brew install node                                                # Node.js 18+ (or the nodejs.org installer)
+brew install blueutil                                            # optional: Bluetooth on/off switch
+```
+
+Open a new terminal afterwards (or run `source "$HOME/.cargo/env"`) so `cargo` is on your `PATH`.
+
+**2. Get it and run it:**
+
+```bash
+git clone https://github.com/Shadhin-f/mission-control-widget.git
+cd mission-control-widget/rust
+npm install
+npm run dev
+```
+
+The build also compiles the native Swift helper (`src/macos/Helper.swift`) into
+`rust/src-tauri/helper/`. The notch appears below the menu bar, and the icon sits in the menu
+bar with no Dock icon, like the Electron edition.
+
+**3. Build the app you keep:**
+
+```bash
+npm run build
+```
+
+This creates `src-tauri/target/release/bundle/macos/Mission Control.app` and a `.dmg` next to it
+in `bundle/dmg/`. Drag the app into **Applications**. It's ad-hoc signed and not notarized: the
+first time, Control-click it and choose **Open**, or click **Open Anyway** in
+**System Settings → Privacy & Security**.
+
+**4. Allow what you want to use.** The permissions are the same as for the Electron edition (see
+the table in [macOS quick start](#macos-quick-start)). With the built app the prompts name
+**Mission Control**; with `npm run dev` they may name your terminal app instead.
+
+Shortcuts use **Control+Option+M** and **Control+Option+Space**. **Launch at startup** adds
+`~/Library/LaunchAgents/com.missioncontrol.widget.plist` pointing at the app you're running.
+
+**Mac troubleshooting**
+
+- **`xcrun swiftc is required` or a `swiftc failed` error.** Run `xcode-select --install`, then
+  build again.
+- **Apple Silicon or Intel:** `npm run build` builds for the Mac you're on. Build on each kind of
+  Mac you want to run it on.
+
+See [rust/README.md](rust/README.md) for how the Rust code maps onto the Electron edition, and for
+its test switches.
+
 ### Extreme mode (Windows only)
 
 Turn on **Settings → Extreme mode** (or **Extreme mode** in the tray menu) to restyle the real
@@ -317,6 +447,8 @@ src/sysctl.ps1       Long-lived helper (started on first use, stops when idle): 
                      brightness, dark mode, lock / sleep
 src/settings.js      JSON settings in the user data folder
 renderer/            UI: index.html, styles.css, app.js (pet, charts, tabs, chat)
+rust/                The Rust (Tauri) edition: the same renderer with a Rust backend
+                     (see rust/README.md)
 ```
 
 - **Click-through:** the window is transparent and ignores the mouse everywhere except on the

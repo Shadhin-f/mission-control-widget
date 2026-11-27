@@ -20,6 +20,9 @@ is used unchanged. A small bridge script (`src-tauri/src/bridge.js`) gives that 
 - **macOS:** the Xcode command line tools (`xcode-select --install`); `build.rs` compiles the Swift
   helper from `../src/macos/Helper.swift`
 
+Step-by-step setup for both systems, with install commands and troubleshooting, is in the main
+README under [Rust edition (Windows and macOS)](../README.md#rust-edition-windows-and-macos).
+
 ## Run and build
 
 ```sh
@@ -28,6 +31,9 @@ npm install
 npm run dev      # run the widget with live Rust rebuilds
 npm run build    # release build + installer (NSIS on Windows, .app/.dmg on macOS)
 ```
+
+Outputs: `src-tauri/target/release/bundle/nsis/` (Windows installer) or
+`src-tauri/target/release/bundle/macos/` and `bundle/dmg/` (macOS).
 
 The release binary is `src-tauri/target/release/mission-control(.exe)`. Settings are shared with the
 Electron edition (`<config dir>/Mission Control/settings.json`), so switching editions keeps your
