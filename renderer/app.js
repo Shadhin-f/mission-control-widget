@@ -110,7 +110,11 @@ function fitPanel() {
   if (state.mode !== 'panel') return;
   const page = $(`.page[data-page="${state.tab}"]`);
   if (!page) return;
-  $('#shell').style.height = `${Math.min(MAX_PANEL_H, BAR_H + TABS_H + Math.ceil(page.offsetHeight))}px`;
+  // A tab taller than the panel's maximum scrolls inside it instead of being cut off
+  const room = MAX_PANEL_H - BAR_H - TABS_H;
+  page.style.maxHeight = `${room}px`;
+  page.style.overflowY = page.scrollHeight > room + 1 ? 'auto' : '';
+  $('#shell').style.height = `${Math.min(MAX_PANEL_H, BAR_H + TABS_H + Math.ceil(Math.min(page.scrollHeight, room)))}px`;
 }
 let fitQueued = false;
 const pageObserver = new ResizeObserver(() => {

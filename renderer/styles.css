@@ -320,8 +320,8 @@ canvas { display: block; width: 100%; }
 .confirm-actions .cta { margin: 0; padding: 0 16px; }
 
 /* settings */
-.settings { display: flex; flex-direction: column; gap: 8px; }
-.set { display: flex; align-items: center; gap: 16px; padding: 12px 14px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--line); cursor: default; }
+.settings { display: flex; flex-direction: column; gap: 7px; }
+.set { display: flex; align-items: center; gap: 16px; padding: 9px 14px; border-radius: 12px; background: var(--bg-card); border: 1px solid var(--line); cursor: default; }
 label.set { cursor: pointer; }
 .set > div { flex: 1; }
 .set b { font-size: 13px; font-weight: 600; }
