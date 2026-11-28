@@ -45,6 +45,22 @@ mod imp {
                 SetWindowLongPtrW(h, GWL_EXSTYLE, n);
                 let _ = SetLayeredWindowAttributes(h, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
             }
+            // A plain popup: a layered window that keeps caption styles gets a classic frame (the faint
+            // "glass" border with a close button) drawn around it. winit adds them back whenever one
+            // of its own flags changes, so this is checked every frame.
+            let st = GetWindowLongPtrW(h, GWL_STYLE);
+            let frame = (WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_BORDER | WS_DLGFRAME).0 as isize;
+            let ns = (st & !frame) | WS_POPUP.0 as isize;
+            if ns != st {
+                SetWindowLongPtrW(h, GWL_STYLE, ns);
+                let _ = SetWindowPos(h, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+                // Windows 11: no accent border and no rounded corners on the (invisible) window rect
+                use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE};
+                let none: u32 = 0xFFFF_FFFE; // DWMWA_COLOR_NONE
+                let square: u32 = 1; // DWMWCP_DONOTROUND
+                let _ = DwmSetWindowAttribute(h, DWMWA_BORDER_COLOR, &none as *const u32 as *const _, 4);
+                let _ = DwmSetWindowAttribute(h, DWMWA_WINDOW_CORNER_PREFERENCE, &square as *const u32 as *const _, 4);
+            }
         }
     }
 

@@ -190,6 +190,12 @@ pub fn install_fonts(ctx: &egui::Context) {
         for (i, w) in [400.0f32, 600.0, 700.0].into_iter().enumerate() {
             let mut tweak = egui::FontTweak::default();
             tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", w)]);
+            // Bahnschrift's line box sits its figures ~1.5 px high at 12 px: nudge them down so text
+            // is optically centred next to icons and inside chips
+            #[cfg(windows)]
+            {
+                tweak.y_offset_factor = 0.1;
+            }
             let name = format!("display{w}");
             extra.push((name.clone(), Arc::new(FontData::from_static(bytes).tweak(tweak))));
             d_names[i].push(name);

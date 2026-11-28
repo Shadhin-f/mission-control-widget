@@ -21,6 +21,9 @@ pub fn style(ctx: &egui::Context) {
         v.selection.bg_fill = rgba(62, 243, 255, 0.30);
         v.selection.stroke = Stroke::new(1.0, CYAN);
         v.text_cursor.stroke = Stroke::new(1.5, CYAN);
+        // Whole-pixel glyphs with hinting: sharper small text than sub-pixel binning
+        v.text_options.font_hinting = true;
+        v.text_options.subpixel_binning = false;
         v.widgets.inactive.bg_fill = SELECT_BG;
         v.widgets.inactive.weak_bg_fill = SELECT_BG;
         v.widgets.inactive.bg_stroke = Stroke::new(1.0, LINE2);
@@ -266,7 +269,8 @@ pub fn draw(app: &mut App, ui: &mut Ui, hits: &mut Vec<Rect>) {
         let top_c = shell.center_top();
         fill_with(&sp, shell, [0.0, 0.0, rad, rad], 5, |q| {
             let k = ((q.y - shell.top()) / sh).clamp(0.0, 1.0);
-            let base = lerp_c(rgba(10, 16, 30, 0.97), rgba(6, 10, 20, 0.97), k);
+            // fully opaque: nothing from the windows underneath shows through the notch
+            let base = lerp_c(rgb(10, 16, 30), rgb(6, 10, 20), k);
             let dx = (q.x - top_c.x) / (1.2 * sw);
             let dy = (q.y - top_c.y) / (0.8 * sh);
             let r = (dx * dx + dy * dy).sqrt() / 0.6;
@@ -375,14 +379,19 @@ fn draw_bar(app: &mut App, ui: &mut Ui, shell: Rect, op: f32, no_ai: bool, hidde
     // net chip
     boxed(&p, net, 13.0, rgba(255, 255, 255, 0.035), LINE);
     let (dn, up) = (if has { s["net"]["down"].as_f64() } else { None }, if has { s["net"]["up"].as_f64() } else { None });
+    // Two equal halves; each holds [arrow value], placed so the widest reading ("999 KB/s") would sit
+    // centred, and left-aligned from there so the numbers don't jump around as they change
     let f = font6(11.5);
-    let x0 = net.left() + 8.0;
-    let ar = text(&p, pos2(x0, cy), Align2::LEFT_CENTER, "↓", font6(11.0), CYAN, 0.0);
-    text_fit(&p, pos2(ar.right() + 3.0, cy), Align2::LEFT_CENTER, &fmt_rate(dn), f.clone(), TEXT, 0.0, 56.0);
-    let upw = text_w(&p, "↑", font6(11.0), 0.0);
-    let ux = net.right() - 8.0 - 56.0 - 3.0 - upw;
-    let ar = text(&p, pos2(ux, cy), Align2::LEFT_CENTER, "↑", font6(11.0), PINK, 0.0);
-    text_fit(&p, pos2(ar.right() + 3.0, cy), Align2::LEFT_CENTER, &fmt_rate(up), f, TEXT, 0.0, 56.0);
+    let half = (net.width() - 12.0) / 2.0;
+    let aw = 11.0;
+    let widest = aw + 4.0 + text_w(&p, "999 KB/s", f.clone(), 0.0);
+    let inset = ((half - widest) / 2.0).max(2.0);
+    for (i, (arrow, col, val)) in [(icons::ARROW_DOWN, CYAN, dn), (icons::ARROW_UP, PINK, up)].into_iter().enumerate() {
+        let x = net.left() + 6.0 + i as f32 * half + inset;
+        let ar = snap(&p, Rect::from_center_size(pos2(x + aw / 2.0, cy), vec2(aw, aw)));
+        icon_glow(&p, ar, arrow, 2.4, col, 2.0);
+        text_fit(&p, pos2(ar.right() + 4.0, cy), Align2::LEFT_CENTER, &fmt_rate(val), f.clone(), TEXT, 0.0, half - inset - aw - 4.0);
+    }
     if app.interactive {
         ui.interact(net, ui.scope_id().with("netchip"), Sense::hover()).on_hover_text("Live download / upload");
     }
@@ -423,17 +432,25 @@ fn draw_bar(app: &mut App, ui: &mut Ui, shell: Rect, op: f32, no_ai: bool, hidde
             icon_glow(&rp, ic, icons::HEX, 1.7, GREEN, 3.0);
         }
         let wins = limit_windows(app, prov);
-        let mut x = ic.right() + 7.0;
-        for (label, pct) in wins {
+        // the two windows share the space after the icon equally, like the net chip
+        let area_l = ic.right() + 4.0;
+        let half = (row.right() - 6.0 - area_l) / 2.0;
+        let widest = text_w(&rp, "7d", font(9.0), 0.54) + 4.0 + text_w(&rp, "100%", font6(11.5), 0.0);
+        let inset = ((half - widest) / 2.0).max(2.0);
+        for (i, (label, pct)) in wins.into_iter().enumerate() {
             let col = match pct {
                 Some(v) if v >= 90.0 => RED,
                 Some(v) if v >= 75.0 => AMBER,
                 _ => TEXT,
             };
-            let lr = text(&rp, pos2(x, row.center().y + 1.0), Align2::LEFT_CENTER, &label, font(9.0), DIM, 0.54);
+            let x = area_l + i as f32 * half + inset;
             let vs = pct.map(|v| format!("{}%", v.round())).unwrap_or("--".into());
-            let vr = text(&rp, pos2(lr.right() + 3.0, row.center().y), Align2::LEFT_CENTER, &vs, font6(11.5), col, 0.0);
-            x = lr.right() + 3.0 + vr.width().max(28.0) + 8.0;
+            // label and value share a baseline
+            let vg = galley(&rp, &vs, font6(11.5), col, 0.0);
+            let lg = galley(&rp, &label, font(9.0), DIM, 0.54);
+            let base_y = row.center().y + vg.size().y / 2.0;
+            let lr = put(&rp, pos2(x, base_y - (vg.size().y - lg.size().y) * 0.18), Align2::LEFT_BOTTOM, lg, DIM);
+            put(&rp, pos2(lr.right() + 4.0, base_y), Align2::LEFT_BOTTOM, vg, col);
         }
     }
     if let Some(r) = resp {
@@ -525,18 +542,19 @@ fn stat_chip(app: &mut App, p: &Painter, r: Rect, k: &str, ico: &[crate::draw::P
     let (warn, crit) = (v.is_some_and(|x| (75.0..90.0).contains(&x)), v.is_some_and(|x| x >= 90.0));
     let c = if crit { RED } else if warn { AMBER } else { base };
     let vcol = if crit { RED } else if warn { AMBER } else { TEXT };
-    let inner = r.shrink2(vec2(8.0, 0.0));
+    let inner = r.shrink2(vec2(10.0, 0.0));
     let cy = r.center().y;
     let vs = v.map(|x| format!("{}%", x.round())).unwrap_or("--".into());
-    let vw = text_w(p, &vs, font6(12.0), 0.0).max(30.0);
-    // icon, value, meter (flex 1, 14..40 px) laid out with space-between
-    let meter_w = (inner.width() - 15.0 - vw - 12.0).clamp(14.0, 40.0);
-    let free = (inner.width() - 15.0 - vw - meter_w - 12.0).max(0.0);
+    // icon | value slot (wide enough for "100%", so nothing shifts as it changes) | meter, with
+    // the two gaps equal
+    let slot = text_w(p, "100%", font6(12.0), 0.0).ceil();
+    let meter_w = (inner.width() - 15.0 - slot - 14.0).clamp(16.0, 36.0).round();
+    let gap = ((inner.width() - 15.0 - slot - meter_w) / 2.0).max(4.0);
     let ic = Rect::from_center_size(pos2(inner.left() + 7.5, cy), vec2(15.0, 15.0));
     icon_glow(p, ic, ico, 1.7, base, 3.0);
-    let vx = ic.right() + 6.0 + free / 2.0 + vw;
-    text(p, pos2(vx, cy), Align2::RIGHT_CENTER, &vs, font6(12.0), vcol, 0.0);
-    let m = Rect::from_min_size(pos2(inner.right() - meter_w, cy - 2.0), vec2(meter_w, 4.0));
+    let slot_c = ic.right() + gap + slot / 2.0;
+    text(p, pos2(slot_c, cy), Align2::CENTER_CENTER, &vs, font6(12.0), vcol, 0.0);
+    let m = snap(p, Rect::from_min_size(pos2(inner.right() - meter_w, cy - 2.0), vec2(meter_w, 4.0)));
     fill(p, m, 2.0, rgba(255, 255, 255, 0.08));
     // Changes under a pixel are applied without a transition (nothing visible would move)
     let target = (pct.clamp(0.0, 100.0)).round() / 100.0;

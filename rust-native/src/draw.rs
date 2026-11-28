@@ -17,11 +17,22 @@ pub fn cr4(tl: f32, tr: f32, br: f32, bl: f32) -> CornerRadius {
 }
 
 /// background + border, like a CSS box with `border: 1px solid`.
+/// Rounds a rect's edges to physical pixels so 1 px borders stay sharp.
+pub fn snap(p: &Painter, r: Rect) -> Rect {
+    let k = p.pixels_per_point();
+    let s = |v: f32| (v * k).round() / k;
+    Rect::from_min_max(pos2(s(r.min.x), s(r.min.y)), pos2(s(r.max.x), s(r.max.y)))
+}
+pub fn snap_pos(p: &Painter, q: Pos2) -> Pos2 {
+    let k = p.pixels_per_point();
+    pos2((q.x * k).round() / k, (q.y * k).round() / k)
+}
+
 pub fn boxed(p: &Painter, r: Rect, radius: f32, fill: Color32, border: Color32) {
-    p.rect(r, cr(radius), fill, if border.a() > 0 { Stroke::new(1.0, border) } else { Stroke::NONE }, StrokeKind::Inside);
+    p.rect(snap(p, r), cr(radius), fill, if border.a() > 0 { Stroke::new(1.0, border) } else { Stroke::NONE }, StrokeKind::Inside);
 }
 pub fn fill(p: &Painter, r: Rect, radius: f32, fill: Color32) {
-    p.rect_filled(r, cr(radius), fill);
+    p.rect_filled(snap(p, r), cr(radius), fill);
 }
 
 /// box-shadow: offset, blur, spread, colour.
@@ -277,8 +288,9 @@ pub fn text_fit(p: &Painter, pos: Pos2, anchor: Align2, s: &str, font: FontId, c
 
 pub fn put(p: &Painter, pos: Pos2, anchor: Align2, g: Arc<Galley>, color: Color32) -> Rect {
     let r = anchor.anchor_size(pos, g.size());
-    p.galley(r.min, g, color);
-    r
+    let at = snap_pos(p, r.min);
+    p.galley(at, g, color);
+    Rect::from_min_size(at, r.size())
 }
 
 // ---------------- SVG icons ----------------

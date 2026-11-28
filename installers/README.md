@@ -39,7 +39,7 @@ doesn't, the installer downloads it during setup.
 
 ```
 9f3fbb5b2c5ab6e6deaeeb2f90732dbbdaff3f9503540b0d96b417e7bb5205f8  Mission Control_1.0.0_x64-setup.exe
-85f095d42c1d0d534e055fe1bf2e337e07dfc290a9265f5da92c7fad611ee7ae  Mission Control Native_1.0.0_x64-setup.exe
+a241e9debb3b31e47a61c9c0a31d31a7cca300571198b1710e723b6ae4554d0f  Mission Control Native_1.0.0_x64-setup.exe
 b5681db6bf8055fe4f9fedb61f069996432a2d5b197ea7348e9d26b9588c8ae8  Mission Control_1.0.0_aarch64.dmg
 ```
 
