@@ -36,6 +36,14 @@
   await rec('setPowerPlan(same)', async () => { const p = (await mc.powerPlans()).find((x) => x.active); return p ? mc.setPowerPlan(p.guid) : 'no active plan'; });
   await rec('sys:unknown(rejects)', () => mc.sys('nope'));
   await rec('scanCache', async () => { let progress = 0; mc.onCleaner(() => progress++); const r = await mc.scanCache(); return { categories: r.map((c) => `${c.id}:${(c.size / 1048576).toFixed(1)}MB${c.running ? '(running)' : ''}`), progressEvents: progress }; });
+  await rec('getPower', async () => {
+    await new Promise((r) => setTimeout(r, 2500)); // first readings arrive about a second after start
+    const p = await mc.getPower();
+    return { ready: p.ready, wallW: p.wallW, dcW: p.dcW, measured: p.measured, parts: p.parts.map((x) => `${x.kind}:${x.name}:${x.watts.toFixed(1)}W:${x.src}`), hist: p.hist.length, today: p.summary.today, basis: p.summary.basis, currency: p.currency };
+  });
+  await rec('getCredits', async () => { const c = await mc.getCredits(false); return { repo: c.repo, error: c.error, people: c.people.map((p) => `${p.login}(${p.commits})`) }; });
+  await rec('openUrl(non-GitHub rejects)', () => mc.openUrl('https://example.com/'));
+  await rec('tabs', () => [...document.querySelectorAll('.tab')].filter((t) => t.offsetWidth).map((t) => `${t.dataset.tab}:${t.offsetWidth}`).concat(`tabsRight:${Math.round(document.querySelector('.tabs').getBoundingClientRect().right)}`, `toolsLeft:${Math.round(document.querySelector('#tabs .tools').getBoundingClientRect().left)}`));
   await rec('killProcs(protected rejects)', async () => { const r = await mc.listProcs(); const g = r.background.find((x) => x.protected); return mc.killProcs(g ? g.pids.slice(0, 1) : [4]); });
   if (window.__MC_SELFTEST_SPEED) {
     await rec('runSpeedTest', async () => { let n = 0; mc.onSpeed(() => n++); const r = await mc.runSpeedTest(); return { ...r, progressEvents: n }; });

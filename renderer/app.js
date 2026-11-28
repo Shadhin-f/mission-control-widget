@@ -83,7 +83,7 @@ async function setMode(m) {
   if (m !== 'collapsed') { mc.focus(); hideBubble(); }
   if (m === 'chat') setTimeout(() => $('#chat-in').focus(), 350);
   if (m === 'panel') { onTab(state.tab); requestAnimationFrame(moveInk); }
-  if (m !== 'panel') { stopAppsPolling(); controls.stop(); }
+  if (m !== 'panel') { stopAppsPolling(); controls.stop(); power.stop(); }
   pet.refresh();
   loop.kick();
 }
@@ -131,7 +131,7 @@ function moveInk() {
   ink.style.width = `${t.offsetWidth - 20}px`;
   ink.style.transform = `translateX(${t.offsetLeft + 10}px)`;
 }
-const TAB_ORDER = ['overview', 'controls', 'network', 'apps', 'cleaner', 'settings'];
+const TAB_ORDER = ['overview', 'controls', 'network', 'power', 'apps', 'cleaner', 'settings', 'credits'];
 $$('.tab').forEach((t) => t.addEventListener('click', () => {
   const prev = state.tab;
   state.tab = t.dataset.tab;
@@ -150,6 +150,8 @@ function onTab(tab) {
   if (tab === 'apps') startAppsPolling(); else stopAppsPolling();
   if (tab === 'controls') controls.start(); else controls.stop();
   if (tab === 'cleaner' && !cleanerState.scanned && !cleanerState.busy) scanCache();
+  if (tab === 'power') power.start(); else power.stop();
+  if (tab === 'credits') credits.load(false);
   loop.kick();
 }
 
@@ -248,48 +250,176 @@ function toast(text) {
   toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
 }
 
-// ---------------- canvas line charts with smooth scrolling ----------------
+// ---------------- canvas line charts: smooth neon lines that glide ----------------
+// Each line is lightly smoothed and drawn as a monotone cubic (it never overshoots the samples), as a soft
+// glow with a hot core, over a gradient fill with scan hatching and a pulsing head. Behind them: a grid
+// that scrolls with the data and a slow scan beam. New samples ease in off the right edge at the measured
+// sample rate, so nothing snaps. (Ported from the pure Rust edition's chart.)
+const smooth01 = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+const hexRgb = (c) => { const n = parseInt(c.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+const rgbaOf = (c, a) => { const [r, g, b] = hexRgb(c); return `rgba(${r},${g},${b},${a})`; };
+const whiter = (c, k) => { const [r, g, b] = hexRgb(c); const m = (v) => Math.round(v + (255 - v) * k); return `rgb(${m(r)},${m(g)},${m(b)})`; };
+
 class Chart {
   constructor(canvas, series, opts = {}) {
     this.c = canvas; this.ctx = canvas.getContext('2d'); this.series = series; this.opts = opts; this.max = opts.max || 1;
+    this.smooth = opts.smooth ?? 1;
   }
   fit() {
     const dpr = window.devicePixelRatio || 1, w = this.c.clientWidth, h = this.c.clientHeight || this.c.height;
     if (this.c.width !== Math.round(w * dpr)) { this.c.width = Math.round(w * dpr); this.c.height = Math.round(h * dpr); }
     this.w = w; this.h = h; this.dpr = dpr;
   }
-  draw(frac) {
+  data(s) { return s.data ? s.data() : state.hist[s.key]; }
+  // frac: 0..1 progress towards the next sample; count: samples pushed so far (anchors the grid)
+  draw(frac, count = 0) {
     if (!this.c.clientWidth) return;
     this.fit();
     const { ctx, w, h } = this;
+    const t = performance.now() / 1000;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    ctx.strokeStyle = 'rgba(110,200,255,0.07)'; ctx.lineWidth = 1;
-    for (let i = 1; i < 4; i++) { const y = Math.round((h * i) / 4) + 0.5; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
     if (!this.opts.max) {
-      let m = 1;
-      for (const s of this.series) for (const v of state.hist[s.key]) m = Math.max(m, v);
-      const target = m * 1.25;
+      let m = this.opts.floor || 1;
+      for (const s of this.series) for (const v of this.data(s)) m = Math.max(m, v);
+      const target = Math.max(m * 1.25, this.opts.floor || 0);
       this.max += (target - this.max) * 0.08;
     }
-    const step = w / (HIST - 2);
-    for (const s of this.series) {
-      const d = state.hist[s.key];
-      if (d.length < 2) continue;
-      const pts = d.map((v, i) => [w + (1 - frac) * step - (d.length - 1 - i) * step, h - 4 - (Math.min(v, this.max * 1.5) / this.max) * (h - 10)]);
-      ctx.beginPath();
-      ctx.moveTo(pts[0][0], pts[0][1]);
-      for (let i = 1; i < pts.length; i++) {
-        const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], mx = (x0 + x1) / 2;
-        ctx.bezierCurveTo(mx, y0, mx, y1, x1, y1);
-      }
-      ctx.strokeStyle = s.color; ctx.lineWidth = 1.8; ctx.shadowColor = s.color; ctx.shadowBlur = 8;
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.lineTo(pts[pts.length - 1][0], h); ctx.lineTo(pts[0][0], h); ctx.closePath();
+    const step = w / (HIST - 2), lag = Math.max(0, 1 - frac), max = this.max;
+    const xOf = (k) => w + (lag - k) * step;
+    const yOf = (v) => h - 4 - (Math.min(Math.max(v, 0), max * 1.5) / max) * (h - 10);
+
+    // ---- backdrop: a grid line every 10 samples that scrolls with the data, and a slow scan beam ----
+    for (let k = 0; k < HIST + 3; k++) {
+      if (count < k || (count - k) % 10 !== 0) continue;
+      const x = Math.round(xOf(k)) + 0.5;
+      if (x < -1 || x > w + 1) continue;
       const g = ctx.createLinearGradient(0, 0, 0, h);
-      g.addColorStop(0, s.fill); g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g; ctx.fill();
+      g.addColorStop(0, 'rgba(110,200,255,0)'); g.addColorStop(0.5, 'rgba(110,200,255,0.07)'); g.addColorStop(1, 'rgba(110,200,255,0.16)');
+      ctx.strokeStyle = g; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+      ctx.strokeStyle = 'rgba(110,200,255,0.45)';
+      ctx.beginPath(); ctx.moveTo(x, h - 3); ctx.lineTo(x, h); ctx.stroke();
+    }
+    {
+      const s = (t / 7) % 1, bw = 90, x = -bw + s * (w + bw * 2), k = smooth01(s * 6) * smooth01((1 - s) * 6);
+      const g = ctx.createLinearGradient(x - bw, 0, x + 2, 0);
+      g.addColorStop(0, 'rgba(62,243,255,0)'); g.addColorStop(bw / (bw + 2), `rgba(62,243,255,${0.045 * k})`); g.addColorStop(1, 'rgba(62,243,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(x - bw, 0, bw + 2, h);
+      ctx.fillStyle = `rgba(62,243,255,${0.15 * k})`; ctx.fillRect(Math.round(x), 0, 1, h);
+    }
+
+    // ---- series ----
+    const heads = [];
+    let peak = null;
+    this.series.forEach((s, si) => {
+      const d = this.data(s), n = d.length;
+      if (n < 2) return;
+      const v = d.slice();
+      // ease the newest samples in from the previous value (a function of each sample's age alone)
+      for (let i = n - 1; i >= 1; i--) {
+        const age = (n - 1 - i) - lag + 1, m = smooth01((age + 1) / 1.5);
+        if (m >= 1) break;
+        v[i] = d[i - 1] + (d[i] - d[i - 1]) * m;
+      }
+      for (let p = 0; p < this.smooth; p++) {
+        const c = v.slice();
+        for (let i = 0; i < n; i++) v[i] = (c[Math.max(0, i - 1)] + 2 * c[i] + c[Math.min(n - 1, i + 1)]) * 0.25;
+      }
+      let first = 0;
+      while (first < n - 1 && xOf(n - 1 - first) < -step) first++;
+      first = Math.max(0, first - 1);
+      const pts = [];
+      for (let i = first; i < n; i++) pts.push([xOf(n - 1 - i), yOf(v[i])]);
+      const np = pts.length;
+      if (np < 2) return;
+      // monotone cubic (Fritsch-Butland tangents)
+      const sec = []; for (let i = 0; i < np - 1; i++) sec.push((pts[i + 1][1] - pts[i][1]) / step);
+      const tan = pts.map((_, i) => {
+        if (i === 0) return sec[0];
+        if (i === np - 1) return sec[np - 2];
+        const a = sec[i - 1], b = sec[i];
+        return a * b <= 0 ? 0 : (2 * a * b) / (a + b);
+      });
+      const subs = Math.max(3, Math.ceil(step / 1.5));
+      const curve = [pts[0]];
+      for (let i = 0; i < np - 1; i++) {
+        const [x0, y0] = pts[i], [x1, y1] = pts[i + 1], m0 = tan[i] * step, m1 = tan[i + 1] * step;
+        for (let k = 1; k <= subs; k++) {
+          const u = k / subs, u2 = u * u, u3 = u2 * u;
+          curve.push([x0 + (x1 - x0) * u, (2 * u3 - 3 * u2 + 1) * y0 + (u3 - 2 * u2 + u) * m0 + (-2 * u3 + 3 * u2) * y1 + (u3 - u2) * m1]);
+        }
+      }
+      const path = new Path2D();
+      path.moveTo(curve[0][0], curve[0][1]);
+      for (let i = 1; i < curve.length; i++) path.lineTo(curve[i][0], curve[i][1]);
+      // fill under the line, fading towards the baseline
+      const area = new Path2D(path);
+      area.lineTo(curve[curve.length - 1][0], h); area.lineTo(curve[0][0], h); area.closePath();
+      const fg = ctx.createLinearGradient(0, 0, 0, h);
+      fg.addColorStop(0, s.fill); fg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = fg; ctx.fill(area);
+      // scan hatching: thin vertical strokes riding the data, brightest just under the line
+      const hatch = new Path2D();
+      for (let i = 0; i < curve.length; i += Math.max(1, Math.floor(subs / 3))) {
+        const [x, y] = curve[i];
+        if (x < 0 || x > w || h - y < 3) continue;
+        hatch.moveTo(Math.round(x) + 0.5, y + 1.5); hatch.lineTo(Math.round(x) + 0.5, y + 1.5 + (h - y - 1.5) * 0.7);
+      }
+      const hg = ctx.createLinearGradient(0, 0, 0, h);
+      hg.addColorStop(0, rgbaOf(s.color, 0.13)); hg.addColorStop(1, rgbaOf(s.color, 0));
+      ctx.strokeStyle = hg; ctx.lineWidth = 1; ctx.stroke(hatch);
+      // glow, then a crisp core with a near-white centre (neon tube)
+      ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      for (const [lw, a] of [[16, 0.04], [9, 0.08], [5, 0.14], [3, 0.24]]) { ctx.strokeStyle = rgbaOf(s.color, a); ctx.lineWidth = lw; ctx.stroke(path); }
+      ctx.strokeStyle = s.color; ctx.lineWidth = 1.9; ctx.stroke(path);
+      ctx.strokeStyle = whiter(s.color, 0.45); ctx.lineWidth = 0.8; ctx.stroke(path);
+      // head: where the line meets the right edge
+      const hx = w - 5;
+      for (let j = 0; j < curve.length - 1; j++) {
+        const [ax, ay] = curve[j], [bx, by] = curve[j + 1];
+        if (ax <= hx && bx >= hx) { const u = bx > ax ? (hx - ax) / (bx - ax) : 0; heads.push([hx, ay + (by - ay) * u, s.color, si]); break; }
+      }
+      // the highest point on screen, for the peak marker (only on a line that actually moves)
+      const on = curve.filter(([x]) => x > 24 && x < w - 24);
+      if (on.length) {
+        let hi = on[0], lo = -Infinity;
+        for (const q of on) { if (q[1] < hi[1]) hi = q; lo = Math.max(lo, q[1]); }
+        if (h - hi[1] > 14 && lo - hi[1] > h * 0.2 && (!peak || hi[1] < peak[1])) peak = [hi[0], hi[1], s.color];
+      }
+    });
+    // fade everything in over the left 42 px, where old samples leave
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    const ef = ctx.createLinearGradient(0, 0, 42, 0);
+    ef.addColorStop(0, 'rgba(0,0,0,1)'); ef.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = ef; ctx.fillRect(0, 0, 42, h);
+    ctx.restore();
+    // horizontal grid with ticks at the right edge
+    for (let i = 1; i < 4; i++) {
+      const y = Math.round((h * i) / 4) + 0.5;
+      ctx.strokeStyle = 'rgba(110,200,255,0.07)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      ctx.strokeStyle = 'rgba(110,200,255,0.3)'; ctx.beginPath(); ctx.moveTo(w - 4, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    // peak marker: a small chevron above the highest point and a dashed drop line
+    if (peak) {
+      const [x, y, c] = peak;
+      ctx.strokeStyle = rgbaOf(c, 0.28); ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(Math.round(x) + 0.5, y + 4); ctx.lineTo(Math.round(x) + 0.5, h - 2); ctx.stroke();
+      ctx.setLineDash([]);
+      const cy = Math.max(y - 6, 4);
+      ctx.strokeStyle = rgbaOf(c, 0.85); ctx.lineWidth = 1.3;
+      ctx.beginPath(); ctx.moveTo(x - 3.5, cy - 3); ctx.lineTo(x, cy); ctx.lineTo(x + 3.5, cy - 3); ctx.stroke();
+    }
+    // heads: soft halo, an expanding ring and a bright dot
+    for (const [x, y, c, si] of heads) {
+      const ph = (t / 1.8 + si * 0.31) % 1;
+      const rg = ctx.createRadialGradient(x, y, 0, x, y, 10);
+      rg.addColorStop(0, rgbaOf(c, 0.35)); rg.addColorStop(1, rgbaOf(c, 0));
+      ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = rgbaOf(c, 0.55 * (1 - ph) * (1 - ph)); ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.arc(x, y, 2.5 + ph * 9, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, 2.8, 0, Math.PI * 2); ctx.fill();
     }
     if (this.opts.label) {
       ctx.fillStyle = 'rgba(125,146,175,0.8)'; ctx.font = '10px Bahnschrift, sans-serif';
@@ -306,15 +436,20 @@ const netChart = new Chart($('#ch-net'), [
   { key: 'down', color: '#3ef3ff', fill: 'rgba(62,243,255,0.2)' },
   { key: 'up', color: '#ff4fd8', fill: 'rgba(255,79,216,0.12)' },
 ], { label: (m) => `peak scale ${fmtRate(m)}` });
+const powerChart = new Chart($('#ch-power'), [
+  { data: () => power.hist, color: '#ffb547', fill: 'rgba(255,181,71,0.16)' },
+], { label: (m) => `scale ${Math.round(m)} W`, floor: 25 });
 
+// New samples glide in at the rate they actually arrive (about once a second)
+const glide = (last, every) => Math.min(1, (performance.now() - last) / Math.max(250, every || 1000));
 const loop = {
   running: false,
   kick() { if (!this.running) { this.running = true; requestAnimationFrame((t) => this.frame(t)); } },
   frame() {
-    const visible = state.mode === 'panel' && (state.tab === 'overview' || state.tab === 'network') && !document.hidden;
+    const visible = state.mode === 'panel' && ['overview', 'network', 'power'].includes(state.tab) && !document.hidden;
     if (!visible) { this.running = false; return; }
-    const frac = Math.min(1, (performance.now() - state.lastPush) / 1000);
-    if (state.tab === 'overview') loadChart.draw(frac); else netChart.draw(frac);
+    if (state.tab === 'power') powerChart.draw(glide(power.lastPush, power.every), power.count);
+    else (state.tab === 'overview' ? loadChart : netChart).draw(glide(state.lastPush, state.pushEvery), state.pushCount);
     requestAnimationFrame((t) => this.frame(t));
   },
 };
@@ -346,7 +481,10 @@ mc.onStats((s) => {
   const gpu = s.gpu;
   const push = (k, v) => { const a = state.hist[k]; a.push(v); if (a.length > HIST) a.shift(); };
   push('cpu', s.cpu); push('ram', ramPct); push('gpu', gpu?.util ?? 0); push('down', s.net.down); push('up', s.net.up);
-  state.lastPush = performance.now();
+  const nowT = performance.now();
+  state.pushEvery = state.pushEvery ? state.pushEvery * 0.8 + Math.min(3000, nowT - state.lastPush) * 0.2 : 1000;
+  state.lastPush = nowT;
+  state.pushCount = (state.pushCount || 0) + 1;
 
   // notch
   setChip('#c-cpu', s.cpu);
@@ -689,6 +827,7 @@ function applySettings(s) {
   renderLimits();
   renderHistory();
   if (s.speedHistory?.[0]) showResult(s.speedHistory[0]);
+  if (typeof power !== 'undefined') power.fill();
 }
 $$('[data-set]').forEach((el) => el.addEventListener('change', async () => {
   const v = el.type === 'checkbox' ? el.checked : el.value;
@@ -1272,6 +1411,191 @@ setInterval(() => {
 mc.onLimits((l) => { $('#c-lim').classList.remove('loading'); if (l) limits = l; renderLimits(); });
 $('#c-lim').addEventListener('click', () => { $('#c-lim').classList.add('loading'); mc.refreshLimits(); setTimeout(() => $('#c-lim').classList.remove('loading'), 25000); });
 setInterval(renderLimits, 60000);
+
+// ---------------- power (shown when the backend provides mc.getPower) ----------------
+// Live power draw and electricity cost: each part of the PC is measured where the hardware reports it and
+// estimated otherwise, and wall energy is logged per day for actual and projected costs.
+const thousands = (n) => Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+function money(cur, v) {
+  if (v >= 10000) return `${cur}${thousands(v)}`;
+  if (v >= 100) return `${cur}${v.toFixed(0)}`;
+  if (v >= 0.1 || v === 0) return `${cur}${v.toFixed(2)}`;
+  return `${cur}${v.toFixed(3)}`;
+}
+function energy(wh) {
+  if (wh >= 1e6) return `${(wh / 1e6).toFixed(2)} MWh`;
+  if (wh >= 1000) return `${(wh / 1000).toFixed(2)} kWh`;
+  return `${wh.toFixed(0)} Wh`;
+}
+const PW_SRC = { measured: ['MEASURED', 'var(--green)'], estimated: ['ESTIMATED', 'var(--amber)'], set: ['YOUR VALUE', 'var(--violet)'], included: ['IN CPU', 'var(--dim)'] };
+const PW_KIND = { cpu: 'var(--cyan)', gpu: 'var(--green)', igpu: 'var(--dim)', ram: 'var(--violet)', charge: 'var(--green)', rest: '#6f8cff', psu: '#ff8a4d', monitor: 'var(--pink)' };
+const power = {
+  snap: null, hist: [], count: 0, lastPush: performance.now(), every: 1000, timer: null,
+  start() {
+    if (this.timer || !mc.getPower) return;
+    const poll = async () => {
+      try { this.show(await mc.getPower()); } catch {}
+    };
+    poll();
+    this.timer = setInterval(poll, 1000);
+  },
+  stop() { clearInterval(this.timer); this.timer = null; },
+  price() { const v = state.settings.powerPrice; return typeof v === 'number' && v >= 0 ? v : null; },
+  currency(s) { const c = String(state.settings.powerCurrency ?? '').trim(); return c || (s && s.currency) || '$'; },
+  show(s) {
+    if (!s) return;
+    this.snap = s;
+    if (s.count !== this.count) {
+      const now = performance.now();
+      if (this.count) this.every = this.every * 0.8 + Math.min(3000, now - this.lastPush) * 0.2;
+      this.lastPush = now; this.count = s.count; this.hist = s.hist || [];
+    }
+    if (!s.ready) return;
+    const price = this.price(), cur = this.currency(s);
+    // live
+    const pct = Math.round(s.measured * 100);
+    const meas = $('#pw-meas');
+    meas.style.setProperty('--mc', pct >= 70 ? 'var(--green)' : pct >= 40 ? 'var(--amber)' : '#ff8a4d');
+    meas.querySelector('b').textContent = `${pct}% measured`;
+    const main = s.onBattery ? (s.batteryW ?? s.dcW) : s.wallW;
+    tweenNum($('#pw-main'), main);
+    $('#pw-from').textContent = s.onBattery ? 'From the battery' : 'From the wall';
+    const loss = (s.parts.find((p) => p.kind === 'psu') || {}).watts || 0;
+    const lines = [];
+    if (s.onBattery) lines.push(['', 'Paid for when it recharges']);
+    else if (price != null) {
+      const perH = (s.wallW / 1000) * price;
+      lines.push(['amber', `${money(cur, perH)} per hour`], ['', `${money(cur, perH * 24)} for 24 h at this rate`]);
+    } else lines.push(['amber', 'Set your electricity price below'], ['', 'to see costs']);
+    lines.push(['', `Inside the PC ${Math.round(s.dcW)} W · loss ${Math.round(loss)} W`]);
+    $('#pw-lines').innerHTML = lines.map(([c, t]) => `<span class="${c}">${esc(t)}</span>`).join('');
+    $('#pw-mbar').style.width = `${Math.max(0, Math.min(100, s.measured * 100))}%`;
+    // costs: today actual, then week / month / year projected
+    const sm = s.summary;
+    const periods = [
+      ['Today', sm.today.wh, Math.max(sm.dailyWh, sm.today.wh), 'so far'],
+      ['Week', sm.last7, sm.dailyWh * 7, 'last 7 days'],
+      ['Month', sm.last30, sm.dailyWh * 30.44, 'last 30 days'],
+      ['Year', sm.last365, sm.dailyWh * 365, 'last 365 days'],
+    ];
+    const show = (wh) => (price != null ? money(cur, (wh / 1000) * price) : energy(wh));
+    $('#pw-costs').innerHTML = periods.map(([name, actual, projected, span], i) => {
+      const big = i === 0 ? actual : projected;
+      const l1 = price != null ? energy(big) : 'set a price for cost';
+      const l2 = i === 0 ? `about ${show(projected)} for the day` : `tracked ${show(actual)} · ${span}`;
+      return `<div class="card"><div class="card-h"><span>${name}</span>${i ? '<span style="color:var(--dim-2)">projected</span>' : ''}</div>
+        <b class="${i ? 'proj' : 'today'}">${esc(show(big))}</b><small>${esc(l1)}</small><small>${esc(l2)}</small></div>`;
+    }).join('');
+    $('#pw-basis').textContent = sm.basis ? `Projections: ${sm.basis} · ${sm.daysTracked} day${sm.daysTracked === 1 ? '' : 's'} tracked so far` : '';
+    // breakdown
+    const total = Math.max(1, s.parts.reduce((a, p) => a + p.watts, 0));
+    $('#pw-det').textContent = `${s.parts.filter((p) => ['cpu', 'gpu', 'igpu'].includes(p.kind)).length} detected`;
+    const list = $('#pw-parts');
+    if (list.children.length !== s.parts.length) {
+      list.innerHTML = s.parts.map(() => '<div class="pw-part"><i class="dot"></i><div class="nm"><b></b><small></small></div><div class="bar"><i></i></div><span class="w"></span><span class="src"></span></div>').join('');
+    }
+    s.parts.forEach((p, i) => {
+      const row = list.children[i];
+      const [label, sc] = PW_SRC[p.src] || PW_SRC.estimated;
+      row.className = `pw-part ${p.src}`;
+      row.style.setProperty('--k', PW_KIND[p.kind] || 'var(--dim)');
+      row.style.setProperty('--sc', sc);
+      row.querySelector('.nm b').textContent = p.load != null ? `${p.name}  ·  ${Math.round(p.load)}%` : p.name;
+      row.querySelector('.nm small').textContent = p.how;
+      row.querySelector('.bar i').style.width = `${Math.max(p.watts > 0 ? 1 : 0, Math.min(100, (p.watts / total) * 100))}%`;
+      row.querySelector('.w').textContent = p.src === 'included' ? '--' : `${p.watts.toFixed(1)} W`;
+      row.querySelector('.src').textContent = label;
+    });
+    // hints on the automatic values
+    $('[data-pw="powerRestW"]').placeholder = `auto ${Math.round(s.restAutoW)}`;
+    $('[data-pw="powerPsuEff"]').placeholder = `auto ${Math.round(s.effAuto * 100)}`;
+    $('[data-pw="powerCurrency"]').placeholder = s.currency || '$';
+    $('[data-pw="powerHours"]').placeholder = sm.hours != null && typeof state.settings.powerHours !== 'number' ? `learned ${sm.hours.toFixed(1)}` : 'auto';
+    $('#pw-cal').disabled = s.onBattery;
+  },
+  // the inputs show the saved value unless you're typing in them
+  fill() {
+    $$('[data-pw]').forEach((el) => {
+      if (document.activeElement === el) return;
+      const v = state.settings[el.dataset.pw];
+      el.value = v == null ? '' : String(v);
+    });
+  },
+  async save(el) {
+    const key = el.dataset.pw, raw = el.value.trim();
+    let v;
+    if (!raw) v = null;
+    else if (el.dataset.text) v = raw.slice(0, 6);
+    else {
+      v = Number(raw.replace(',', '.'));
+      if (!Number.isFinite(v) || v < 0) { toast('Enter a number, or leave it empty for automatic'); this.fill(); return; }
+    }
+    if (v === (state.settings[key] ?? null)) return;
+    applySettings(await mc.setSetting(key, v));
+    if (this.snap) this.show(this.snap);
+  },
+  // Set "rest of the system" so the estimated wall power matches a plug-in meter's reading
+  async calibrate() {
+    const s = this.snap;
+    const wall = Number($('#pw-wall').value.trim().replace(',', '.'));
+    if (!(wall > 0 && wall < 5000)) { toast('Enter the watts your meter shows first'); return; }
+    if (!s || !s.ready || s.onBattery) return;
+    const monitor = Number(state.settings.powerMonitorW) || 0;
+    const eff = s.wallW - monitor > 1 ? Math.max(0.5, Math.min(1, s.dcW / (s.wallW - monitor))) : s.effAuto;
+    const rest = (s.parts.find((p) => p.kind === 'rest') || {}).watts ?? s.restAutoW;
+    const newRest = Math.round((rest + (wall - monitor) * eff - s.dcW) * 10) / 10;
+    if (newRest < 0) { toast(`The meter reads less than the measured parts alone (${Math.round(s.wallW - rest / eff)} W). Check the monitor and efficiency settings.`); return; }
+    applySettings(await mc.setSetting('powerRestW', newRest));
+    $('#pw-wall').value = '';
+    toast(`Calibrated: rest of the system is now ${Math.round(newRest)} W`);
+  },
+};
+$$('[data-pw]').forEach((el) => {
+  el.addEventListener('blur', () => power.save(el));
+  el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.blur(); });
+});
+$('#pw-cal').addEventListener('click', () => power.calibrate());
+$('#pw-wall').addEventListener('keydown', (e) => { if (e.key === 'Enter') power.calibrate(); });
+
+// ---------------- credits (shown when the backend provides mc.getCredits) ----------------
+const credits = {
+  loaded: false, busy: false, repo: 'Shadhin-f/mission-control-widget',
+  async load(force) {
+    if (!mc.getCredits || this.busy || (this.loaded && !force)) return;
+    this.busy = true;
+    try {
+      const r = await mc.getCredits(!!force);
+      this.loaded = true;
+      this.repo = r.repo || this.repo;
+      this.render(r);
+    } catch (e) {
+      $('#cr-sub').textContent = `Offline (${e.message})`;
+    } finally { this.busy = false; }
+  },
+  render(r) {
+    const people = r.people || [];
+    $('#cr-sub').textContent = r.error ? (people.length ? 'Offline · saved list' : `Offline (${r.error})`) : `${people.length} ${people.length === 1 ? 'person' : 'people'} · from GitHub`;
+    const owner = this.repo.split('/')[0].toLowerCase();
+    $('#cr-grid').innerHTML = people.map((p) => {
+      const role = p.commits ? `${p.commits} commit${p.commits === 1 ? '' : 's'}` : 'Contributor';
+      const sub = p.login.toLowerCase() === owner ? `${role} · maintainer` : role;
+      // avatars arrive as cached data: URLs; without one the coloured initial shows
+      const img = p.avatar ? `<img src="${esc(p.avatar)}" alt="">` : '';
+      return `<button class="cr-person" data-url="${esc(p.url)}" title="Open ${esc(p.login)} on GitHub">
+        <span class="cr-av" style="--h:${hueOf(p.login)}">${esc(p.login.slice(0, 1).toUpperCase())}${img}</span>
+        <span><b>${esc(p.login)}</b><small>${esc(sub)}</small></span></button>`;
+    }).join('');
+  },
+};
+$('#cr-grid').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-url]');
+  if (b && mc.openUrl) mc.openUrl(b.dataset.url).catch(() => {});
+});
+$('#cr-repo').addEventListener('click', () => { if (mc.openUrl) mc.openUrl(`https://github.com/${credits.repo}`).catch(() => {}); });
+// The extra tabs appear only where the backend provides them (the Rust editions)
+document.body.classList.toggle('has-power', !!mc.getPower);
+document.body.classList.toggle('has-credits', !!mc.getCredits);
+document.body.classList.toggle('many-tabs', !!(mc.getPower || mc.getCredits));
 
 // ---------------- clock ----------------
 function tickClock() {
