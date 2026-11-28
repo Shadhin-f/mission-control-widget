@@ -31,29 +31,19 @@
   });
 
   // ---- Extreme mode glow line ----
-  // The renderer opens a child window and writes its HTML; here that window lives in Rust and the page
-  // only sends the HTML and the class changes.
+  // The Electron edition's Extreme mode draws a glow line along the taskbar in a child window. Here, as in
+  // the pure Rust edition, Extreme mode shows the Mission Control dock instead (Rust, dock.rs), so the
+  // line's window is a no-op stand-in that the renderer can open and close as usual.
   const nativeOpen = window.open.bind(window);
   window.open = (url, name, features) => {
     if (name !== 'mc-edge') return nativeOpen(url, name, features);
-    let html = '', closed = false;
-    fire('edge_open');
-    const classList = {
-      add: (c) => fire('edge_class', { name: String(c), on: true }),
-      remove: (c) => fire('edge_class', { name: String(c), on: false }),
-      toggle: (c, force) => fire('edge_class', { name: String(c), on: !!force }),
-    };
-    const el = { classList };
+    let closed = false;
+    const noop = () => {};
+    const el = { classList: { add: noop, remove: noop, toggle: noop } };
     return {
       get closed() { return closed; },
-      close() { if (!closed) { closed = true; fire('edge_close'); } },
-      document: {
-        open() { html = ''; },
-        write(h) { html += h; },
-        close() { fire('edge_html', { html }); },
-        getElementById(id) { return closed || id !== 'e' ? null : el; },
-        getAnimations() { return []; },
-      },
+      close() { closed = true; },
+      document: { open: noop, write: noop, close: noop, getElementById: (id) => (closed || id !== 'e' ? null : el), getAnimations: () => [] },
     };
   };
 
@@ -64,6 +54,10 @@
     getSettings: () => inv('settings_get'),
     setSetting: (k, v) => inv('settings_set', { key: k, value: v === undefined ? null : v }),
     getStatic: () => inv('static_get'),
+    // Power and Credits tabs (the renderer shows them only when these exist)
+    getPower: () => inv('power_get'),
+    getCredits: (force) => inv('credits_get', { force: !!force }),
+    openUrl: (url) => inv('open_url', { url: String(url) }),
     listProcs: () => inv('procs_list'),
     killProcs: (pids) => inv('procs_kill', { pids }),
     scanCache: () => inv('cleaner_scan'),

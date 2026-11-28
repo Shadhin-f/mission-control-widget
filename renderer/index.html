@@ -51,9 +51,11 @@
         <button class="tab active" data-tab="overview">Overview</button>
         <button class="tab" data-tab="controls">Controls</button>
         <button class="tab" data-tab="network">Network</button>
+        <button class="tab ext-tab" data-tab="power">Power</button>
         <button class="tab" data-tab="apps">Apps</button>
         <button class="tab" data-tab="cleaner">Cleaner</button>
         <button class="tab" data-tab="settings">Settings</button>
+        <button class="tab ext-tab" data-tab="credits">Credits</button>
         <i class="tab-ink"></i>
       </div>
       <div class="tools">
@@ -231,6 +233,42 @@
         </div>
       </div>
 
+      <!-- POWER (shown when the backend provides mc.getPower) -->
+      <div class="page" data-page="power">
+        <div class="card">
+          <div class="card-h"><span>Live power</span><span class="pw-meas" id="pw-meas"><i></i><b>--</b></span></div>
+          <div class="pw-live">
+            <div class="pw-left">
+              <div class="pw-big"><b id="pw-main">--</b><small>W</small></div>
+              <div class="pw-from" id="pw-from">From the wall</div>
+              <div class="pw-lines" id="pw-lines"><span class="dim">Reading sensors...</span></div>
+              <div class="pw-mbar"><i id="pw-mbar"></i></div>
+              <div class="pw-mlab"><span>Measured</span><span>Estimated</span></div>
+            </div>
+            <canvas id="ch-power" height="170" style="height:170px"></canvas>
+          </div>
+        </div>
+        <div class="pw-costs" id="pw-costs"></div>
+        <div class="pw-basis" id="pw-basis"></div>
+        <div class="card">
+          <div class="card-h"><span>Where it goes</span><span class="dim" id="pw-det">--</span></div>
+          <div id="pw-parts"></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><span>Your numbers</span><span class="dim">empty = automatic</span></div>
+          <div class="pw-form" id="pw-form">
+            <label><span>Electricity price per kWh</span><input data-pw="powerPrice" placeholder="e.g. 0.15"><em></em></label>
+            <label><span>Currency symbol</span><input data-pw="powerCurrency" data-text="1" maxlength="6"><em></em></label>
+            <label><span>Rest of the system</span><input data-pw="powerRestW"><em>W</em></label>
+            <label><span>Power supply efficiency</span><input data-pw="powerPsuEff"><em>%</em></label>
+            <label><span>Monitor(s)</span><input data-pw="powerMonitorW" placeholder="0"><em>W</em></label>
+            <label><span>PC is on per day</span><input data-pw="powerHours"><em>h</em></label>
+            <label><span>A wall meter reads</span><button class="ghost" id="pw-cal">Apply</button><input id="pw-wall" placeholder="watts"><em>W</em></label>
+          </div>
+          <p class="pw-note">Counts while Mission Control is running; sleep and shutdown use very little. On a laptop on battery, energy is counted when it recharges. Got a plug-in power meter? Enter its reading and press Apply to calibrate the estimate.</p>
+        </div>
+      </div>
+
       <!-- APPS -->
       <div class="page" data-page="apps">
         <div class="apps-head">
@@ -271,6 +309,27 @@
             <select data-set="chatMode"><option value="auto">Auto</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan (read-only)</option></select></div>
           <div class="set"><div><b>Shortcuts</b><small><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>M</kbd> Mission Control &nbsp; <span class="ai-only"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>Space</kbd> Ask AI &nbsp;</span> <kbd>Esc</kbd> collapse</small></div></div>
           <div class="set"><div><b>Quit Mission Control</b><small>You can also quit from the tray icon.</small></div><button class="ghost danger-t" id="btn-quit">Quit</button></div>
+        </div>
+      </div>
+
+      <!-- CREDITS (shown when the backend provides mc.getCredits) -->
+      <div class="page" data-page="credits">
+        <div class="card cr-hero">
+          <div class="cr-title"><b>Mission Control</b><small>Open source and built by the people below. Thank you for every commit, idea and bug report.</small>
+            <div class="cr-chips"><span>MIT licence</span><span>Rust edition</span><span>Tauri + WebView</span></div>
+          </div>
+          <button class="ghost" id="cr-repo">View on GitHub &#8599;</button>
+        </div>
+        <div class="card">
+          <div class="card-h"><span>Contributors</span><span class="dim" id="cr-sub">Loading from GitHub...</span></div>
+          <div class="cr-grid" id="cr-grid"></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><span>Built with</span><span class="dim">and the Rust community</span></div>
+          <div class="cr-built">
+            <span><b>Tauri</b>interface</span><span><b>WebView2 / WebKit</b>rendering</span><span><b>tokio</b>async runtime</span><span><b>reqwest</b>speed test</span>
+            <span><b>sysinfo</b>CPU / RAM</span><span><b>serde</b>settings</span><span><b>windows-rs</b>system APIs</span><span><b>tiny-skia</b>Extreme dock</span>
+          </div>
         </div>
       </div>
     </div>

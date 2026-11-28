@@ -3,6 +3,7 @@
 mod claude;
 mod cleaner;
 mod codex;
+mod credits;
 mod login;
 mod network;
 mod processes;
@@ -10,11 +11,28 @@ mod settings;
 mod stats;
 mod util;
 
+// ---- Shared with the pure Rust edition (../../rust-native/src), compiled unchanged ----
+// power.rs reads its settings through `crate::backend::Backend::get` and sizes its history with
+// `crate::app::HIST`; here those are this edition's App state and the interface's chart length.
+mod backend {
+    pub type Backend = crate::App;
+}
+mod app {
+    pub const HIST: usize = 90;
+}
+#[path = "../../../rust-native/src/power.rs"]
+mod power;
+/// Extreme mode's centred dock (replaces the taskbar), drawn on its own thread
+#[cfg(windows)]
+#[path = "../../../rust-native/src/dock.rs"]
+mod dock;
+
 #[cfg(windows)]
 mod extreme;
 #[cfg(target_os = "macos")]
 mod native_mac;
 #[cfg(windows)]
+#[allow(dead_code)] // the taskbar helper is used by the pure Rust edition only
 mod native_win;
 #[cfg(target_os = "macos")]
 mod sys_mac;
@@ -28,7 +46,6 @@ use native_win as native;
 
 use serde_json::{json, Value};
 use settings::{flag, Settings};
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -54,11 +71,13 @@ pub struct App {
     #[cfg_attr(not(windows), allow(dead_code))] // only Windows changes system colours
     touch_system: bool,
     cursor_gen: AtomicU64,
-    edge_html: Mutex<String>,
-    edge_classes: Mutex<HashSet<String>>,
-    edge_rect: Mutex<Option<(f64, f64, f64, f64)>>,
-    edge_hot: AtomicBool,
     work_area: Mutex<Option<(i32, i32, u32, u32, f64)>>,
+    /// live power draw and the energy log (started once the state exists)
+    power: std::sync::OnceLock<Arc<power::PowerMon>>,
+    #[cfg(windows)]
+    dock: dock::Dock,
+    #[cfg(windows)]
+    dock_on: AtomicBool,
 }
 
 type S<'a> = State<'a, Arc<App>>;
@@ -73,9 +92,6 @@ impl App {
     }
     fn main(&self) -> Option<WebviewWindow> {
         self.handle.get_webview_window("main")
-    }
-    fn edge(&self) -> Option<WebviewWindow> {
-        self.handle.get_webview_window("edge")
     }
     fn get(&self, k: &str) -> Value {
         self.settings.lock().unwrap().get(k).cloned().unwrap_or(Value::Null)
@@ -137,7 +153,7 @@ impl App {
 
     #[cfg(windows)]
     fn own_hwnds(&self) -> Vec<isize> {
-        [self.main(), self.edge()].into_iter().flatten().filter_map(|w| w.hwnd().ok().map(|h| h.0 as isize)).collect()
+        self.main().into_iter().filter_map(|w| w.hwnd().ok().map(|h| h.0 as isize)).collect()
     }
 
     fn open_mode(&self, mode: &str) {
@@ -169,20 +185,6 @@ impl App {
                         last = (p.x, p.y);
                         let scale = me.main().and_then(|w| w.scale_factor().ok()).unwrap_or(1.0);
                         me.emit("cursor", json!({ "x": (p.x / scale).round(), "y": (p.y / scale).round() }));
-                        // Extreme mode: light up the glow line while the pointer is on the taskbar
-                        let rect = *me.edge_rect.lock().unwrap();
-                        if let Some((x, y, w, h)) = rect {
-                            let hot = p.x >= x && p.x <= x + w && p.y >= y && p.y <= y + h;
-                            if hot != me.edge_hot.swap(hot, Ordering::SeqCst) {
-                                me.emit("edge:hot", hot);
-                                #[cfg(windows)]
-                                if hot {
-                                    if let Some(e) = me.edge().and_then(|e| e.hwnd().ok()) {
-                                        native::move_top(e.0 as isize);
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -206,9 +208,8 @@ impl App {
         if let Some(w) = self.main() {
             self.hide(&w);
         }
-        if let Some(e) = self.edge() {
-            self.hide(&e);
-        }
+        #[cfg(windows)]
+        self.dock.send(dock::Msg::Idle(true));
         self.update_tray();
     }
 
@@ -219,7 +220,8 @@ impl App {
         if let Some(w) = self.main() {
             self.show_inactive(&w);
         }
-        self.place_edge();
+        #[cfg(windows)]
+        self.dock.send(dock::Msg::Idle(false));
         self.emit("idle", false);
         self.start_work();
         self.update_tray();
@@ -265,6 +267,7 @@ impl App {
                 tauri::async_runtime::spawn(async move { login::apply(on).await });
             }
             "extremeMode" => {
+                self.sync_dock();
                 let me = self.clone();
                 tauri::async_runtime::spawn(async move {
                     if truthy {
@@ -306,6 +309,13 @@ impl App {
                 self.save();
             }
             extreme::apply().await;
+            // The dock replaces the taskbar: auto-hide it (it still slides up at the bottom edge)
+            if self.get("dockBackup").is_null() {
+                let was = dock::taskbar_autohide();
+                self.settings.lock().unwrap().insert("dockBackup".into(), json!({ "autohide": was }));
+                self.save();
+            }
+            dock::set_taskbar_autohide(true);
         }
     }
 
@@ -316,45 +326,32 @@ impl App {
                 return;
             }
             extreme::restore(&self.get("extremeBackup")).await;
+            self.restore_taskbar();
             self.settings.lock().unwrap().insert("extremeBackup".into(), Value::Null);
+            self.settings.lock().unwrap().insert("dockBackup".into(), Value::Null);
             self.save();
         }
     }
 
-    /// The glow line sits on the top edge of a bottom taskbar; hidden for other edges or auto-hide.
-    fn place_edge(&self) {
-        if let Some(e) = self.edge() {
-            self.place_edge_on(&e);
+    /// Gives the taskbar back its own setting and removes the dock's reserved strip.
+    #[cfg(windows)]
+    fn restore_taskbar(&self) {
+        dock::release_appbar();
+        let b = self.get("dockBackup");
+        if b.is_object() {
+            dock::set_taskbar_autohide(b["autohide"].as_bool().unwrap_or(false));
         }
     }
 
-    fn place_edge_on(&self, e: &WebviewWindow) {
+    /// Extreme mode shows the Mission Control dock in place of the taskbar (Windows).
+    fn sync_dock(&self) {
         #[cfg(windows)]
         {
-            let t = native::taskbar();
-            if std::env::var_os("MC_DIAG_EDGE").is_some() {
-                eprintln!("[edge] taskbar={t:?} idle={}", self.idle.load(Ordering::SeqCst));
-            }
-            match t {
-                Some(t) if t.edge == 3 && !t.autohide && !self.idle.load(Ordering::SeqCst) => {
-                    let scale = e.scale_factor().unwrap_or(1.0);
-                    *self.edge_rect.lock().unwrap() = Some((t.x as f64, t.y as f64, t.width as f64, t.height as f64));
-                    let h = (5.0 * scale).round() as i32;
-                    let _ = e.set_position(PhysicalPosition::new(t.x, t.y - (2.0 * scale).round() as i32));
-                    let _ = e.set_size(PhysicalSize::new(t.width as u32, h as u32));
-                    if let Ok(hw) = e.hwnd() {
-                        // Windows may keep a minimum window height: clip to the strip so nothing else is covered
-                        native::clip_window(hw.0 as isize, t.width, h);
-                        native::show_inactive(hw.0 as isize);
-                        native::move_top(hw.0 as isize);
-                    }
-                    return;
-                }
-                _ => {}
+            let on = self.on("extremeMode");
+            if on != self.dock_on.swap(on, Ordering::SeqCst) {
+                self.dock.send(dock::Msg::On(on));
             }
         }
-        *self.edge_rect.lock().unwrap() = None;
-        self.hide(e);
     }
 
     // ---------------- AI plan limits ----------------
@@ -433,12 +430,42 @@ impl App {
         self.stop_work();
         self.claude.stop();
         self.codex.stop();
-        // The taskbar goes back to the user's colours whenever the widget isn't running; the saved
-        // originals stay in settings, and the theme is applied again on the next launch.
+        if let Some(p) = self.power.get() {
+            p.flush();
+        }
+        // The taskbar goes back to the user's colours (and its own auto-hide setting) whenever the widget
+        // isn't running; the saved originals stay in settings, and Extreme mode returns on the next launch.
         #[cfg(windows)]
         if self.touch_system && self.on("extremeMode") {
             extreme::restore_sync(&self.get("extremeBackup"));
+            self.restore_taskbar();
         }
+    }
+
+    /// The Power tab's data: the latest power snapshot, as JSON for the interface.
+    fn power_json(&self) -> Value {
+        let Some(p) = self.power.get() else { return json!({ "ready": false }) };
+        let s = p.snap.lock().unwrap().clone();
+        let src = |s: power::Src| match s {
+            power::Src::Measured => "measured",
+            power::Src::Estimated => "estimated",
+            power::Src::Set => "set",
+            power::Src::Included => "included",
+        };
+        let day = |d: &power::Day| json!({ "wh": d.wh, "s": d.s, "mwh": d.mwh });
+        let sm = &s.summary;
+        json!({
+            "ready": s.ready,
+            "parts": s.parts.iter().map(|p| json!({ "kind": p.kind, "name": p.name, "watts": p.watts, "src": src(p.src), "how": p.how, "load": p.load })).collect::<Vec<_>>(),
+            "dcW": s.dc_w, "wallW": s.wall_w, "measured": s.measured,
+            "laptop": s.laptop, "onBattery": s.on_battery, "batteryW": s.battery_w,
+            "hist": s.hist, "count": s.count,
+            "summary": {
+                "today": day(&sm.today), "last7": sm.last7, "last30": sm.last30, "last365": sm.last365,
+                "daysTracked": sm.days_tracked, "dailyWh": sm.daily_wh, "basis": sm.basis, "avgW": sm.avg_w, "hours": sm.hours,
+            },
+            "currency": s.currency, "restAutoW": s.rest_auto_w, "effAuto": s.eff_auto,
+        })
     }
 }
 
@@ -703,85 +730,33 @@ fn limits_refresh(s: S) {
     tauri::async_runtime::spawn(async move { me.refresh_codex_limits().await });
 }
 
-// ---- Extreme mode glow line: a second, click-through window on the taskbar's top edge ----
+// ---- Power and Credits tabs (shared with the pure Rust edition) ----
 
 #[tauri::command]
-fn edge_open() {}
+fn power_get(s: S) -> Value {
+    s.power_json()
+}
+
+#[tauri::command]
+async fn credits_get(force: bool) -> Value {
+    credits::get(force).await
+}
+
+/// Opens a contributor's or the project's GitHub page in the browser (GitHub links only).
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    if !url.starts_with("https://github.com/") {
+        return Err("Only GitHub links can be opened".into());
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
 
 /// Dev only: receives the MC_SELFTEST report and writes it to that file.
 #[tauri::command]
 fn dev_report(report: Value) {
     if let Some(path) = std::env::var_os("MC_SELFTEST") {
         let _ = std::fs::write(path, serde_json::to_string_pretty(&report).unwrap_or_default());
-    }
-}
-
-// async: creating a window from a synchronous command deadlocks on Windows (it runs on the main thread)
-#[tauri::command]
-async fn edge_html(app: AppHandle, html: String) -> Result<(), String> {
-    if !cfg!(windows) {
-        return Ok(());
-    }
-    let s = state(&app);
-    *s.edge_html.lock().unwrap() = html;
-    s.edge_classes.lock().unwrap().clear();
-    if let Some(e) = s.edge() {
-        let _ = e.eval("location.reload()");
-        return Ok(());
-    }
-    let url = if cfg!(windows) { "http://mcedge.localhost/" } else { "mcedge://localhost/" };
-    let e = WebviewWindowBuilder::new(&app, "edge", WebviewUrl::CustomProtocol(url.parse().map_err(|e: url::ParseError| e.to_string())?))
-        .title("Mission Control edge")
-        .decorations(false)
-        .transparent(true)
-        .resizable(false)
-        .maximizable(false)
-        .minimizable(false)
-        .skip_taskbar(true)
-        .always_on_top(true)
-        .shadow(false)
-        .focused(false)
-        // Created visible (off-screen, unfocused) so Tauri's visibility flag never fights ours; see App::hide
-        .visible(cfg!(windows))
-        .position(-32000.0, -32000.0)
-        .inner_size(10.0, 5.0)
-        .on_page_load(|w, p| {
-            if matches!(p.event(), tauri::webview::PageLoadEvent::Finished) {
-                let s = state(w.app_handle());
-                let classes: Vec<String> = s.edge_classes.lock().unwrap().iter().cloned().collect();
-                for c in classes {
-                    let _ = w.eval(format!("document.getElementById('e')?.classList.add({})", serde_json::to_string(&c).unwrap()));
-                }
-            }
-        })
-        .build()
-        .map_err(|e| e.to_string())?;
-    let _ = e.set_ignore_cursor_events(true);
-    s.place_edge_on(&e);
-    Ok(())
-}
-
-#[tauri::command]
-fn edge_class(s: S, name: String, on: bool) {
-    {
-        let mut c = s.edge_classes.lock().unwrap();
-        if on {
-            c.insert(name.clone());
-        } else {
-            c.remove(&name);
-        }
-    }
-    if let Some(e) = s.edge() {
-        let _ = e.eval(format!("document.getElementById('e')?.classList.toggle({}, {on})", serde_json::to_string(&name).unwrap()));
-    }
-}
-
-#[tauri::command]
-fn edge_close(s: S) {
-    *s.edge_rect.lock().unwrap() = None;
-    s.edge_hot.store(false, Ordering::SeqCst);
-    if let Some(e) = s.edge() {
-        let _ = e.close();
     }
 }
 
@@ -833,14 +808,10 @@ pub fn run() {
                 })
                 .build(),
         )
-        .register_uri_scheme_protocol("mcedge", |ctx, _req| {
-            let html = state(ctx.app_handle()).edge_html.lock().unwrap().clone();
-            tauri::http::Response::builder().header("Content-Type", "text/html; charset=utf-8").body(html.into_bytes()).unwrap()
-        })
         .invoke_handler(tauri::generate_handler![
             set_interactive, ui_focus, ui_size, settings_get, settings_set, static_get, procs_list, procs_kill, cleaner_scan, cleaner_clean,
             speed_run, ai_send, ai_stop, ai_new, app_quit, sys_helper, sys_wifi, sys_wifi_connect, sys_wifi_disconnect, sys_plans,
-            sys_set_plan, sys_session, sys_open, limits_get, limits_refresh, edge_open, edge_html, edge_class, edge_close, dev_report
+            sys_set_plan, sys_session, sys_open, limits_get, limits_refresh, power_get, credits_get, open_url, dev_report
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -885,12 +856,15 @@ pub fn run() {
                 codex: codex.clone(),
                 touch_system,
                 cursor_gen: AtomicU64::new(0),
-                edge_html: Mutex::new(String::new()),
-                edge_classes: Mutex::new(HashSet::new()),
-                edge_rect: Mutex::new(None),
-                edge_hot: AtomicBool::new(false),
                 work_area: Mutex::new(None),
+                power: std::sync::OnceLock::new(),
+                #[cfg(windows)]
+                dock: dock::Dock::spawn(),
+                #[cfg(windows)]
+                dock_on: AtomicBool::new(false),
             });
+            // Power readings run on their own thread for as long as the app runs (also while idle)
+            let _ = st.power.set(power::PowerMon::start(st.clone()));
             app.manage(st.clone());
             {
                 let h = handle.clone();
@@ -936,9 +910,7 @@ pub fn run() {
                         let _ = h.emit("win:blur", ());
                     }
                     WindowEvent::ScaleFactorChanged { .. } => {
-                        let s = state(&h);
-                        s.place();
-                        s.place_edge();
+                        state(&h).place();
                     }
                     _ => {}
                 });
@@ -992,6 +964,7 @@ pub fn run() {
             }
 
             if st.on("extremeMode") {
+                st.sync_dock();
                 let s = st.clone();
                 tauri::async_runtime::spawn(async move { s.apply_extreme().await });
             }
@@ -1020,12 +993,6 @@ pub fn run() {
                                 if now != *s.work_area.lock().unwrap() {
                                     s.place();
                                 }
-                            }
-                        }
-                        // Keep the glow line on the taskbar's top edge (taskbar moved, resized, auto-hide)
-                        if !s.idle.load(Ordering::SeqCst) {
-                            if let Some(e) = s.edge() {
-                                s.place_edge_on(&e);
                             }
                         }
                     }
