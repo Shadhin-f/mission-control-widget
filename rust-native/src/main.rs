@@ -50,6 +50,8 @@ mod controls;
 mod credits;
 mod draw;
 #[cfg(windows)]
+mod dock;
+#[cfg(windows)]
 mod edge;
 mod icons;
 mod idle;

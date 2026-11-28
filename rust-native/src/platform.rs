@@ -24,7 +24,20 @@ mod imp {
 
     /// A tool window: no taskbar button and not in Alt+Tab, like Electron's "toolbar" window type.
     pub fn style_widget(hwnd: isize) {
+        unsafe {
+            // The whole window is client area. winit trims 1 px off the top of undecorated windows
+            // (a hack to keep a drop shadow), and Windows paints that strip as a light line.
+            let _ = windows::Win32::UI::Shell::SetWindowSubclass(HWND(hwnd as *mut _), Some(no_frame_proc), 0x4d43, 0);
+        }
         set_click_through(hwnd, true);
+    }
+
+    unsafe extern "system" fn no_frame_proc(h: HWND, msg: u32, w: windows::Win32::Foundation::WPARAM, l: windows::Win32::Foundation::LPARAM, _id: usize, _data: usize) -> windows::Win32::Foundation::LRESULT {
+        if msg == WM_NCCALCSIZE && w.0 != 0 {
+            // leave the proposed rect as is: client area = window area, no non-client strip
+            return windows::Win32::Foundation::LRESULT(0);
+        }
+        windows::Win32::UI::Shell::DefSubclassProc(h, msg, w, l)
     }
 
     /// Click-through on or off. A click-through window must be layered + transparent; a layered window

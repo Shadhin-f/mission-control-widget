@@ -159,6 +159,13 @@ impl Backend {
                 self.save();
             }
             crate::extreme::apply().await;
+            // The dock replaces the taskbar: auto-hide it (it still slides up at the bottom edge)
+            if self.get("dockBackup").is_null() {
+                let was = crate::dock::taskbar_autohide();
+                self.settings.lock().unwrap().insert("dockBackup".into(), json!({ "autohide": was }));
+                self.save();
+            }
+            crate::dock::set_taskbar_autohide(true);
         }
     }
 
@@ -169,8 +176,19 @@ impl Backend {
                 return;
             }
             crate::extreme::restore(&self.get("extremeBackup")).await;
+            self.restore_taskbar();
             self.settings.lock().unwrap().insert("extremeBackup".into(), Value::Null);
+            self.settings.lock().unwrap().insert("dockBackup".into(), Value::Null);
             self.save();
+        }
+    }
+
+    #[cfg(windows)]
+    fn restore_taskbar(&self) {
+        crate::dock::release_appbar();
+        let b = self.get("dockBackup");
+        if b.is_object() {
+            crate::dock::set_taskbar_autohide(b["autohide"].as_bool().unwrap_or(false));
         }
     }
 
@@ -278,6 +296,7 @@ impl Backend {
         #[cfg(windows)]
         if self.touch_system && self.on("extremeMode") {
             crate::extreme::restore_sync(&self.get("extremeBackup"));
+            self.restore_taskbar();
         }
     }
 

@@ -187,8 +187,12 @@ pub struct App {
     pub styled: bool,
     #[cfg(windows)]
     pub edge: crate::edge::Edge,
+    #[cfg(windows)]
+    pub dock: crate::dock::Dock,
     #[cfg_attr(not(windows), allow(dead_code))]
     pub edge_on: bool,
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub dock_on: bool,
     pub tray: Option<crate::tray::Tray>,
     pub greeted: bool,
     pub shots: Option<crate::shots::Shots>,
@@ -289,7 +293,10 @@ impl App {
             styled: false,
             #[cfg(windows)]
             edge: crate::edge::Edge::spawn(),
+            #[cfg(windows)]
+            dock: crate::dock::Dock::spawn(),
             edge_on: false,
+            dock_on: false,
             tray,
             greeted: false,
             shots: crate::shots::Shots::from_env(),
@@ -488,7 +495,8 @@ impl App {
         }
         #[cfg(windows)]
         {
-            let on = self.is_win() && self.set_bool("extremeMode") && !self.idle;
+            // The glow line decorated the full-width taskbar; with the dock replacing it, it stays off
+            let on = false && self.is_win() && self.set_bool("extremeMode") && !self.idle;
             let t = if on { crate::native::taskbar() } else { None };
             let place = match t {
                 Some(t) if t.edge == 3 && !t.autohide => Some((t.x, t.y, t.width, ppp)),
@@ -499,6 +507,11 @@ impl App {
             if on != self.edge_on {
                 self.edge_on = on;
                 self.edge.send(crate::edge::Msg::On(on));
+            }
+            let dock_on = self.is_win() && self.set_bool("extremeMode");
+            if dock_on != self.dock_on {
+                self.dock_on = dock_on;
+                self.dock.send(crate::dock::Msg::On(dock_on));
             }
         }
     }
@@ -688,6 +701,8 @@ impl App {
         }
         self.idle = full;
         self.be.idle.store(full, Ordering::SeqCst);
+        #[cfg(windows)]
+        self.dock.send(crate::dock::Msg::Idle(full));
         if full {
             self.be.stop_work();
             self.set_mode(Mode::Collapsed);
@@ -837,6 +852,12 @@ impl App {
             backend::call("r:procs", async { tokio::task::spawn_blocking(crate::processes::list).await.map_err(|e| e.to_string()) });
         }
         self.apps.kill_arm.retain(|_, t| *t > now);
+        // dev only: MC_DEV_QUIT_AFTER=<seconds> quits through the normal path (tests the restores)
+        if let Some(t) = std::env::var("MC_DEV_QUIT_AFTER").ok().and_then(|v| v.parse::<f64>().ok()) {
+            if now > t && !self.quitting {
+                self.quit();
+            }
+        }
         self.ctl_timers(now);
         if !self.greeted && now > 0.9 {
             self.greeted = true;

@@ -9,7 +9,7 @@ contributors.
 
 | | Electron edition | Pure Rust edition |
 | --- | --- | --- |
-| Download / install size | ~300 MB | 3.9 MB installer, 7 MB app |
+| Download / install size | ~300 MB | 4.1 MB installer, 7 MB app |
 | Memory while idle (Windows) | ~364 MB in 4 processes | ~87 MB in 1 process |
 | CPU while idle (Windows, one core) | ~10% | ~3% |
 
@@ -27,6 +27,21 @@ Measured on one Windows 11 PC (i5-12400, RTX 3060), widget collapsed, same setti
 
 Run only one edition at a time: they all sit in the same spot at the top of the screen, share one
 settings file and use the same "launch at startup" entry.
+
+## Extreme mode dock (Windows)
+
+On Windows, Extreme mode themes the Start menu and accent colours like the other editions and, in
+place of the full-width taskbar, shows a centred **Mission Control dock**:
+
+- Start button, your taskbar's pinned apps (same order), then other running apps after a divider.
+- macOS-style magnification under the pointer, the app's name above it, a launch bounce, and a cyan
+  dot under running apps (a wider bar for the app in front).
+- Click: open, switch to, or minimise the app in front (cycles through an app's windows).
+  Middle-click: a new window. Right-click: New window / Close window.
+- The Windows taskbar is set to auto-hide while the dock is on, so the tray, clock and notifications
+  slide up at the bottom edge as usual (the dock steps aside meanwhile). The dock reserves its strip
+  like the taskbar did, so maximised windows end above it.
+- Turning Extreme mode off, or quitting, restores your taskbar setting and colours exactly.
 
 ## Build from source
 
@@ -65,8 +80,8 @@ cargo packager --release -c "$(cat packager-macos.json)"   # macOS: .app and .dm
   (`pointer.rs`) watches the cursor, like Electron's forwarded mouse moves, and wakes the interface
   only when something visible should change. While nothing moves, nothing is redrawn; small background
   animations (the bar meters) run at 30 fps, everything you interact with at 60 fps.
-- Extreme mode's glow line is a small layered window drawn on the CPU from its own thread (`edge.rs`),
-  so it needs no second GPU context.
+- Extreme mode's dock (`dock.rs`) is a layered window drawn on the CPU (tiny-skia) from its own
+  thread, so it needs no second GPU context, and it only redraws while something moves.
 - macOS uses the same Swift helper as the other editions for CoreAudio, CoreWLAN and Bluetooth
   (`build.rs` compiles it; the packager puts it in the app's Resources).
 
@@ -76,8 +91,10 @@ cargo packager --release -c "$(cat packager-macos.json)"   # macOS: .app and .dm
 | --- | --- |
 | `MC_SETTINGS_DIR=<folder>` | Use another settings folder (test runs never touch your real settings) |
 | `MC_NO_LOGIN=1` | Don't touch the launch-at-startup entry |
-| `MC_DIAG=1` | Never change Windows colours or startup (Extreme mode still shows its glow line) |
+| `MC_DIAG=1` | Never change Windows colours, the taskbar or startup (Extreme mode still shows the dock, without reserving space) |
 | `MC_SHOTS=<folder>` | Save a PNG of the collapsed notch, hover, every tab and the chat, then stay open (`MC_SHOTS_ONLY=overview,chat` limits it) |
 | `MC_DEV_OFFSET_X=<px>` | Shift the window sideways, to test next to an installed copy |
 | `MC_NO_AI=1` | Preview the layout without Claude Code / Codex |
+| `MC_DEV_QUIT_AFTER=<s>` | Quit normally after that many seconds (tests that Extreme mode restores everything) |
+| `MC_DOCK_DEBUG=1` | Log the dock's apps and how their icons resolved |
 | `MC_DIAG_FPS=1`, `MC_DIAG_ANIM=1` | Log every frame / every running animation (to find what keeps the widget repainting) |
