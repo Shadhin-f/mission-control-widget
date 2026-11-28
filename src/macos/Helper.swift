@@ -1,5 +1,6 @@
 import Cocoa
 import CoreAudio
+import IOKit
 import CoreWLAN
 import CoreLocation
 import IOBluetooth
@@ -73,8 +74,66 @@ func brightness(_ value: Float? = nil, _ index: UInt32 = 0) throws -> [[String: 
         return ["index": id, "name": "Display \(id)", "min": 0, "max": 100, "cur": Int(v*100)]
     }
 }
+// Read-only power telemetry. Battery voltage/current use the documented mV/mA units.
+func registryProperties(_ service: io_service_t) -> [String: Any] {
+    var value: Unmanaged<CFMutableDictionary>?
+    guard IORegistryEntryCreateCFProperties(service, &value, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+          let props = value?.takeRetainedValue() else { return [:] }
+    return props as NSDictionary as? [String: Any] ?? [:]
+}
+func powerReading() -> [String: Any] {
+    var result: [String: Any] = ["currency": Locale.current.currencySymbol ?? "$", "gpus": []]
+    let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+    if service != 0 {
+        defer { IOObjectRelease(service) }
+        let b = registryProperties(service)
+        let present = b["BatteryInstalled"] as? Bool ?? false
+        let ac = b["ExternalConnected"] as? Bool ?? false
+        let volts = (b["Voltage"] as? NSNumber)?.doubleValue ?? 0
+        // NSNumber preserves the signed interpretation of older unsigned registry encodings.
+        let amps = (b["InstantAmperage"] as? NSNumber ?? b["Amperage"] as? NSNumber)?.int64Value ?? 0
+        let rate = volts * Double(amps) / 1000 // mV × mA -> mW
+        var battery: [String: Any] = ["present": present, "ac": ac]
+        if volts > 0 && volts < 60000 && abs(rate) < 500000 { battery["rateMw"] = rate }
+        result["battery"] = battery
+        // Optional Apple telemetry is undocumented: require V×I to agree with the reported mW.
+        // This is DC power at the Mac connector, NOT wall power or the adapter's rated capacity.
+        if ac, let t = b["PowerTelemetryData"] as? [String: Any],
+           let mv = t["SystemVoltageIn"] as? NSNumber, let ma = t["SystemCurrentIn"] as? NSNumber,
+           let mw = t["SystemPowerIn"] as? NSNumber {
+            let product = mv.doubleValue * ma.doubleValue / 1_000_000
+            let reported = mw.doubleValue / 1000
+            if product > 0.1 && product < 500 && abs(product - reported) < max(1, product * 0.15) {
+                result["systemDcW"] = product
+            }
+        }
+    }
+    var utilizations: [Double] = []
+    var iterator: io_iterator_t = 0
+    if IOServiceGetMatchingServices(kIOMainPortDefault, IOServiceMatching("IOAccelerator"), &iterator) == KERN_SUCCESS {
+        defer { IOObjectRelease(iterator) }
+        while true {
+            let accelerator = IOIteratorNext(iterator)
+            if accelerator == 0 { break }
+            let props = registryProperties(accelerator)
+            if let stats = props["PerformanceStatistics"] as? [String: Any], let n = stats["Device Utilization %"] as? NSNumber {
+                utilizations.append(max(0, min(100, n.doubleValue)))
+            }
+            IOObjectRelease(accelerator)
+        }
+    }
+    let devices = MTLCopyAllDevices()
+    result["gpus"] = devices.map { device -> [String: Any] in
+        var gpu: [String: Any] = ["name": device.name, "integrated": device.hasUnifiedMemory || device.isLowPower]
+        // Do not assign one adapter's counters to another GPU on machines with multiple adapters.
+        if devices.count == 1 && utilizations.count == 1 { gpu["util"] = utilizations[0] }
+        return gpu
+    }
+    return result
+}
 func execute(_ cmd: String, _ a: [String: Any]) throws -> Any {
     switch cmd {
+    case "power": return powerReading()
     case "state":
         let bt = IOBluetoothHostController.default()
         return ["audio": ["out": devices(false), "in": devices(true)], "radios": [["kind": "WiFi", "state": CWWiFiClient.shared().interface()?.powerOn() == true ? "On" : "Off"], ["kind": "Bluetooth", "state": bt?.powerState == kBluetoothHCIPowerStateON ? "On" : "Off"]], "dark": UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"]

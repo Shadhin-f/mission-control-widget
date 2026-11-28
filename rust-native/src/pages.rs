@@ -182,11 +182,12 @@ fn tabs_nav(app: &mut App, ui: &mut Ui, r: Rect) {
     let clock = crate::platform::fmt_clock(chrono::Local::now());
     let cr_ = text(&p, pos2(x - 8.0 + 4.0, r.center().y), Align2::RIGHT_CENTER, &clock, mono(11.0), DIM, 0.44);
     app.next_tick = app.now + (60 - chrono::Local::now().timestamp() % 60) as f64;
-    // tabs (left): shrink their padding if all seven don't fit beside the tools
+    // Tabs adapt to the available room beside the clock and tools.
     let widths: Vec<f32> = TABS.iter().map(|t| text_w(&p, t.label(), font(11.0), 1.32)).collect();
     let avail = cr_.left() - 12.0 - r.left();
     let natural: f32 = widths.iter().map(|w| w + 26.0).sum::<f32>() + 2.0 * (TABS.len() as f32 - 1.0);
-    let pad = if natural <= avail { 13.0 } else { ((avail - widths.iter().sum::<f32>() - 12.0) / 14.0).max(5.0) };
+    let gaps = 2.0 * TABS.len().saturating_sub(1) as f32;
+    let pad = if natural <= avail { 13.0 } else { ((avail - widths.iter().sum::<f32>() - gaps) / (2.0 * TABS.len() as f32)).max(0.0) };
     let mut tx = r.left();
     let mut ink: Option<(f32, f32)> = None;
     for (t, w) in TABS.into_iter().zip(widths) {

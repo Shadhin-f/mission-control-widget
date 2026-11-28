@@ -86,6 +86,9 @@ pub struct Snapshot {
     pub currency: String,
     pub rest_auto_w: f32,
     pub eff_auto: f32,
+    /// Explains the measurement boundary; component estimates never become measured readings.
+    pub source_note: String,
+    pub dc_measured: bool,
 }
 
 pub struct PowerMon {
@@ -129,6 +132,8 @@ impl PowerMon {
             let cfg = Cfg::read(&be);
             let mut s = self.snap.lock().unwrap();
             compute(&mut s, &r, &cfg, cpu_util, threads, &cpu_name);
+            #[cfg(target_os = "macos")]
+            if let Some(currency) = &r.currency { s.currency = currency.clone(); }
             let wall = s.wall_w as f64;
             let measured = s.measured as f64;
             {
@@ -200,7 +205,9 @@ fn compute(s: &mut Snapshot, r: &hw::Reading, cfg: &Cfg, cpu_util: f32, threads:
         Some(w) => parts.push(Part { kind: "cpu", name: cpu_name.into(), watts: w, src: Src::Measured, how: "Windows energy meter (CPU package)".into(), load: Some(cpu_util) }),
         None => {
             let n = threads as f32;
-            let (idle, max) = if laptop { (3.0, (8.0 + 2.5 * n).clamp(15.0, 80.0)) } else { (10.0, (20.0 + 6.0 * n).clamp(45.0, 200.0)) };
+            let (idle, max) = if cfg!(target_os = "macos") && cpu_name.starts_with("Apple") {
+                (2.0, (8.0 + 2.5 * n).clamp(15.0, 140.0))
+            } else if laptop { (3.0, (8.0 + 2.5 * n).clamp(15.0, 80.0)) } else { (10.0, (20.0 + 6.0 * n).clamp(45.0, 200.0)) };
             parts.push(Part {
                 kind: "cpu",
                 name: cpu_name.into(),
@@ -250,7 +257,7 @@ fn compute(s: &mut Snapshot, r: &hw::Reading, cfg: &Cfg, cpu_util: f32, threads:
     if let Some(b) = r.battery.filter(|b| b.present && b.ac && b.rate_mw > 0) {
         parts.push(Part { kind: "charge", name: "Battery charging".into(), watts: b.rate_mw as f32 / 1000.0, src: Src::Measured, how: "Battery charge rate".into(), load: None });
     }
-    let rest_auto = if laptop { 6.0 } else { 35.0 };
+    let rest_auto = if laptop { 6.0 } else if cfg!(target_os = "macos") { 10.0 } else { 35.0 };
     let rest = cfg.rest_w.unwrap_or(rest_auto);
     parts.push(Part {
         kind: "rest",
@@ -261,11 +268,34 @@ fn compute(s: &mut Snapshot, r: &hw::Reading, cfg: &Cfg, cpu_util: f32, threads:
         load: None,
     });
 
+    let mut measured_dc = false;
+    s.source_note.clear();
+    #[cfg(target_os = "macos")]
+    {
+        let battery_dc = r.battery.filter(|b| b.present && !b.ac && b.rate_mw < 0).map(|b| -b.rate_mw as f32 / 1000.0);
+        let total = if on_battery { battery_dc } else { r.system_dc_w };
+        if cfg.rest_w.is_none() {
+            if let Some(total) = total.filter(|v| v.is_finite() && *v > 0.0 && *v < 1000.0) {
+                let fixed: f32 = parts.iter().filter(|p| p.src != Src::Estimated).map(|p| p.watts).sum();
+                let estimates: f32 = parts.iter().filter(|p| p.src == Src::Estimated).map(|p| p.watts).sum();
+                if total >= fixed && estimates > 0.0 {
+                    for part in parts.iter_mut().filter(|p| p.src == Src::Estimated) {
+                        part.watts *= (total - fixed) / estimates;
+                        part.how = "Estimated share of measured Mac DC input; no per-part power sensor".into();
+                    }
+                    measured_dc = true;
+                }
+            }
+        }
+        s.source_note = if measured_dc {
+            if on_battery { "Battery measured; component split estimated" } else { "DC measured; charger loss estimated" }
+        } else { "Component and wall figures are estimates" }.into();
+    }
     let dc: f32 = parts.iter().map(|p| p.watts).sum();
     let measured: f32 = parts.iter().filter(|p| p.src == Src::Measured).map(|p| p.watts).sum();
     let eff_auto = if laptop { 0.88 } else { 0.87 };
     let eff = cfg.eff.unwrap_or(eff_auto);
-    let loss = dc / eff - dc;
+    let loss = if on_battery { 0.0 } else { dc / eff - dc };
     parts.push(Part {
         kind: "psu",
         name: if laptop { "Charger loss".into() } else { "Power supply loss".into() },
@@ -282,9 +312,10 @@ fn compute(s: &mut Snapshot, r: &hw::Reading, cfg: &Cfg, cpu_util: f32, threads:
     s.on_battery = on_battery;
     s.battery_w = r.battery.filter(|b| b.present && !b.ac && b.rate_mw < 0).map(|b| (-b.rate_mw) as f32 / 1000.0);
     s.dc_w = dc;
+    s.dc_measured = measured_dc;
     // on battery nothing is drawn from the wall now; that energy is paid for when it recharges
     s.wall_w = if on_battery { 0.0 } else { dc + loss + cfg.monitor_w };
-    s.measured = if on_battery && s.battery_w.is_some() { 1.0 } else if dc > 0.0 { (measured / dc).clamp(0.0, 1.0) } else { 0.0 };
+    s.measured = if measured_dc || (on_battery && s.battery_w.is_some()) { 1.0 } else if dc > 0.0 { (measured / dc).clamp(0.0, 1.0) } else { 0.0 };
     s.parts = parts;
     s.rest_auto_w = rest_auto;
     s.eff_auto = eff_auto;
@@ -734,7 +765,7 @@ mod hw {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod hw {
     #[derive(Clone, Copy, Debug)]
     pub struct Battery {
@@ -770,5 +801,101 @@ mod hw {
     }
     pub fn currency() -> String {
         "$".into()
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod hw {
+    use serde_json::{json, Value};
+    #[derive(Clone, Copy, Debug)]
+    pub struct Battery { pub present: bool, pub ac: bool, pub rate_mw: i32 }
+    #[derive(Clone, Debug)]
+    pub struct Gpu { pub name: String, pub vendor: &'static str, pub vram: u64, pub integrated: bool, pub util: Option<f32>, pub power_w: Option<f32> }
+    #[derive(Default)]
+    pub struct Reading { pub cpu_pkg_w: Option<f32>, pub dram_w: Option<f32>, pub gpus: Vec<Gpu>, pub battery: Option<Battery>, pub system_dc_w: Option<f32>, pub currency: Option<String> }
+    pub struct Sensors;
+    impl Sensors {
+        pub fn new() -> Self { Self }
+        pub fn read(&mut self) -> Reading {
+            match tauri::async_runtime::block_on(crate::native_mac::helper("power", &json!({}), false)) {
+                Ok(v) => parse(&v),
+                Err(_) => Reading::default(),
+            }
+        }
+    }
+    pub fn parse(v: &Value) -> Reading {
+        let no_sensor = std::env::var_os("MC_POWER_ESTIMATE").is_some();
+        let finite = |v: &Value, max: f64| v.as_f64().filter(|n| n.is_finite() && *n >= 0.0 && *n < max).map(|n| n as f32);
+        let battery = v["battery"].as_object().map(|b| Battery {
+            present: b.get("present").and_then(Value::as_bool).unwrap_or(false),
+            ac: b.get("ac").and_then(Value::as_bool).unwrap_or(true),
+            rate_mw: if no_sensor { 0 } else { b.get("rateMw").and_then(Value::as_f64).filter(|n| n.is_finite() && n.abs() < 500000.0).unwrap_or(0.0) as i32 },
+        });
+        let gpus = v["gpus"].as_array().map(|gpus| gpus.iter().map(|g| Gpu {
+            name: g["name"].as_str().unwrap_or("Mac GPU").into(), vendor: "Mac", vram: 0,
+            integrated: g["integrated"].as_bool().unwrap_or(true), util: finite(&g["util"], 100.1), power_w: None,
+        }).collect()).unwrap_or_default();
+        Reading { battery, gpus, system_dc_w: if no_sensor { None } else { finite(&v["systemDcW"], 500.0) }, currency: v["currency"].as_str().filter(|c| !c.is_empty()).map(String::from), ..Default::default() }
+    }
+    pub fn currency() -> String { "$".into() }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+    fn config() -> Cfg { Cfg { rest_w: None, eff: Some(0.8), monitor_w: 0.0, hours: None } }
+    fn reading(ac: bool, rate: i32, dc: Option<f32>) -> hw::Reading {
+        hw::Reading { battery: Some(hw::Battery { present: true, ac, rate_mw: rate }), system_dc_w: dc, ..Default::default() }
+    }
+    #[test]
+    fn mac_dc_total_includes_charging_without_double_counting() {
+        let mut s = Snapshot::default();
+        compute(&mut s, &reading(true, 5000, Some(20.0)), &config(), 40.0, 10, "Apple M4");
+        assert!((s.dc_w - 20.0).abs() < 0.001);
+        assert!((s.wall_w - 25.0).abs() < 0.001);
+        assert!(s.dc_measured);
+        assert_eq!(s.parts.iter().find(|p| p.kind == "charge").unwrap().watts, 5.0);
+        assert_eq!(s.parts.iter().find(|p| p.kind == "cpu").unwrap().src, Src::Estimated);
+    }
+    #[test]
+    fn battery_discharge_is_measured_but_does_not_bill_wall_energy() {
+        let mut s = Snapshot::default();
+        compute(&mut s, &reading(false, -9000, None), &config(), 80.0, 10, "Apple M4");
+        assert!(s.on_battery && s.dc_measured);
+        assert!((s.dc_w - 9.0).abs() < 0.001);
+        assert_eq!(s.battery_w, Some(9.0));
+        assert_eq!(s.wall_w, 0.0);
+        assert_eq!(s.parts.iter().find(|p| p.kind == "psu").unwrap().watts, 0.0);
+    }
+    #[test]
+    fn inconsistent_charge_and_adapter_samples_fall_back_to_estimates() {
+        let mut s = Snapshot::default();
+        compute(&mut s, &reading(true, 25000, Some(20.0)), &config(), 20.0, 10, "Apple M4");
+        assert!(!s.dc_measured);
+        assert!(s.parts.iter().all(|p| p.watts.is_finite() && p.watts >= 0.0));
+    }
+    #[test]
+    fn manual_component_override_is_preserved() {
+        let mut s = Snapshot::default();
+        let mut c = config(); c.rest_w = Some(15.0);
+        compute(&mut s, &reading(true, 5000, Some(20.0)), &c, 20.0, 10, "Apple M4");
+        assert!(!s.dc_measured);
+        let rest = s.parts.iter().find(|p| p.kind == "rest").unwrap();
+        assert_eq!(rest.watts, 15.0); assert_eq!(rest.src, Src::Set);
+    }
+    #[test]
+    fn malformed_power_values_are_rejected() {
+        let r = hw::parse(&json!({"systemDcW": -5, "battery":{"present":true,"ac":true,"rateMw":1e20}, "gpus":[{"name":"GPU","util":101}]}));
+        assert!(r.system_dc_w.is_none()); assert_eq!(r.battery.unwrap().rate_mw, 0);
+        assert!(r.gpus[0].util.is_none());
+    }
+    #[test]
+    fn energy_log_projects_watt_hours_using_explicit_daily_hours() {
+        let mut log = Log { days: BTreeMap::new(), dirty: false };
+        log.add(20.0, 3600.0, 0.5);
+        let s = log.summary(Some(8.0));
+        assert_eq!(s.today.wh, 20.0); assert_eq!(s.today.mwh, 10.0);
+        assert_eq!(s.daily_wh, 160.0);
+        assert_eq!(log.summary(Some(0.0)).daily_wh, 0.0);
     }
 }

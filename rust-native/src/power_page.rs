@@ -89,7 +89,8 @@ pub fn page(app: &mut App, ui: &mut Ui) {
     if s.ready {
         let pct = (s.measured * 100.0).round();
         let c = if pct >= 70.0 { GREEN } else if pct >= 40.0 { AMBER } else { ORANGE };
-        let lr = card_h_right(&p, h, &format!("{pct:.0}% measured"), c);
+        let badge = if s.dc_measured && cfg!(target_os = "macos") { "DC measured · wall estimated".to_string() } else { format!("{pct:.0}% measured") };
+        let lr = card_h_right(&p, h, &badge, c);
         let d = pos2(lr.left() - 9.0, h.center().y);
         let ph = (app.now as f32 / 1.6).fract();
         p.circle_filled(d, 3.0, c);
@@ -103,7 +104,7 @@ pub fn page(app: &mut App, ui: &mut Ui) {
         let shown = crate::anim::num(&mut app.a, "pw_main", main_w);
         let nr = text(&p, left.left_top(), Align2::LEFT_TOP, &format!("{:.0}", shown), font6(46.0), TEXT, -0.4);
         text(&p, pos2(nr.right() + 6.0, nr.bottom() - 10.0), Align2::LEFT_BOTTOM, "W", font6(18.0), DIM, 0.0);
-        let sub = if s.on_battery { "FROM THE BATTERY" } else { "FROM THE WALL" };
+        let sub = if s.on_battery { "FROM THE BATTERY" } else if cfg!(target_os = "macos") { "ESTIMATED WALL POWER" } else { "FROM THE WALL" };
         let sr = text(&p, pos2(left.left(), nr.bottom() + 2.0), Align2::LEFT_TOP, sub, font(9.5), CYAN, 1.6);
         let mut y = sr.bottom() + 12.0;
         let line = |y: &mut f32, s: &str, c: Color32| {
@@ -121,7 +122,8 @@ pub fn page(app: &mut App, ui: &mut Ui) {
             line(&mut y, "to see costs", DIM);
         }
         let loss = s.parts.iter().find(|p| p.kind == "psu").map(|p| p.watts).unwrap_or(0.0);
-        line(&mut y, &format!("Inside the PC {:.0} W · loss {:.0} W", s.dc_w, loss), DIM);
+        line(&mut y, &format!("System {:.0} W · loss {:.0} W", s.dc_w, loss), DIM);
+        if !s.source_note.is_empty() { line(&mut y, &s.source_note, DIM2); }
         // measured vs estimated bar
         let bar = Rect::from_min_size(pos2(left.left(), left.bottom() - 22.0), vec2(left.width() - 8.0, 6.0));
         fill(&p, bar, 3.0, rgba(255, 181, 71, 0.22));
@@ -261,7 +263,7 @@ pub fn page(app: &mut App, ui: &mut Ui) {
         (0, 1, "Rest of the system", "powerRestW", &rest_hint, "W", 80.0),
         (1, 1, "Power supply efficiency", "powerPsuEff", &eff_hint, "%", 80.0),
         (0, 2, "Monitor(s)", "powerMonitorW", "0", "W", 80.0),
-        (1, 2, "PC is on per day", "powerHours", &hours_hint, "h", 80.0),
+        (1, 2, "Hours on per day", "powerHours", &hours_hint, "h", 80.0),
         (0, 3, "A wall meter reads", "powerWall", "watts", "W", 80.0),
     ];
     for (c, rw, label, key, hint, unit, w) in rows {
@@ -358,6 +360,17 @@ fn calibrate(app: &mut App, s: &crate::power::Snapshot) {
     let monitor = app.settings["powerMonitorW"].as_f64().unwrap_or(0.0) as f32;
     // the efficiency in use right now (automatic or set)
     let eff = if s.wall_w - monitor > 1.0 { (s.dc_w / (s.wall_w - monitor)).clamp(0.5, 1.0) } else { s.eff_auto };
+    if s.dc_measured && cfg!(target_os = "macos") {
+        let efficiency = s.dc_w / (wall - monitor);
+        if !efficiency.is_finite() || !(0.5..=1.0).contains(&efficiency) {
+            app.toast("The wall reading must exceed the Mac's measured DC input; check the meter and monitor value");
+            return;
+        }
+        app.set_setting("powerPsuEff", json!(efficiency * 100.0));
+        app.pw.buf.insert("powerWall", String::new());
+        app.toast(format!("Calibrated charger efficiency to {:.0}%", efficiency * 100.0));
+        return;
+    }
     let rest = s.parts.iter().find(|p| p.kind == "rest").map(|p| p.watts).unwrap_or(s.rest_auto_w);
     let dc_needed = (wall - monitor) * eff;
     let new_rest = ((rest + dc_needed - s.dc_w) * 10.0).round() / 10.0;
