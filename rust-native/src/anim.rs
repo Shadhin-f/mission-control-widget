@@ -117,14 +117,6 @@ impl Anims {
         t.at(now)
     }
 
-    /// Run `f` with its tweens marked as background (30 fps)
-    pub fn low<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        self.lo = true;
-        let r = f(self);
-        self.lo = false;
-        r
-    }
-
     /// Set a value immediately (no transition), e.g. while dragging a slider.
     pub fn snap(&mut self, k: impl Hash, value: f32) {
         let frame = self.frame;

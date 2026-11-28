@@ -36,8 +36,8 @@ pub fn style(ctx: &egui::Context) {
             w.corner_radius = cr(8.0);
             w.fg_stroke = Stroke::new(1.0, TEXT);
         }
-        v.popup_shadow = egui::epaint::Shadow { offset: [0, 10], blur: 30, spread: 0, color: rgba(0, 0, 0, 0.5) };
-        v.window_shadow = v.popup_shadow;
+        v.popup_shadow = egui::epaint::Shadow::NONE;
+        v.window_shadow = egui::epaint::Shadow::NONE;
         s.spacing.scroll = egui::style::ScrollStyle { bar_width: 6.0, handle_min_length: 20.0, bar_inner_margin: 0.0, bar_outer_margin: 0.0, floating: false, ..egui::style::ScrollStyle::solid() };
         v.widgets.inactive.bg_fill = SELECT_BG;
         s.interaction.selectable_labels = false;
@@ -262,8 +262,6 @@ pub fn draw(app: &mut App, ui: &mut Ui, hits: &mut Vec<Rect>) {
     let pc = app.a.color("root_pc", app.pet.root_pc, 0.8);
     if op > 0.001 {
         let sp = { let mut q = sp.clone(); q.set_opacity(op); q };
-        // box-shadow: 0 10px 40px rgba(0,0,0,.55)
-        shadow(&sp, shell, rad, vec2(0.0, 10.0), 40.0, 0.0, rgba(0, 0, 0, 0.55));
         // background: radial glow over a vertical gradient
         let (sw, sh) = (shell.width(), shell.height());
         let top_c = shell.center_top();
@@ -558,13 +556,13 @@ fn stat_chip(app: &mut App, p: &Painter, r: Rect, k: &str, ico: &[crate::draw::P
     fill(p, m, 2.0, rgba(255, 255, 255, 0.08));
     // Changes under a pixel are applied without a transition (nothing visible would move)
     let target = (pct.clamp(0.0, 100.0)).round() / 100.0;
-    let (kk, mc) = app.a.low(|a| {
+    let (kk, mc) = (|a: &mut crate::anim::Anims| {
         let prev = a.v(("meter", k), target, 0.35, SMOOTH);
         if ((target - prev) * meter_w).abs() < 0.75 {
             a.snap(("meter", k), target);
         }
         (a.v(("meter", k), target, 0.35, SMOOTH), a.color(("meter_c", k), c, 0.6))
-    });
+    })(&mut app.a);
     if kk > 0.001 {
         let f = Rect::from_min_size(m.min, vec2(m.width() * kk, 4.0));
         glow(p, f, 2.0, 6.0, fade(mc, 0.8));
@@ -716,7 +714,6 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
     let br = 17.0 * s;
     let body_rect = Rect::from_center_size(bc, vec2(br * 2.0, br * 2.0));
     shadow(&p, body_rect, br, Vec2::ZERO, 14.0, 0.0, fade(pc, 0.45));
-    shadow(&p, body_rect, br, vec2(0.0, 3.0), 10.0, 0.0, rgba(0, 0, 0, 0.5));
     let focal = o(6.0 + 10.88, 4.0 + 8.84);
     let stops = [(0.0, rgb(0xff, 0xff, 0xff)), (0.22, rgb(0xd6, 0xe3, 0xf2)), (0.62, rgb(0x8c, 0x9c, 0xb6)), (1.0, rgb(0x4a, 0x58, 0x73))];
     let hole = bc + vec2(-3.0, -4.0) * s;
@@ -930,7 +927,6 @@ fn draw_bubble(app: &mut App, ui: &mut Ui) {
     let scale = 0.92 + 0.08 * k;
     let top = 56.0 - 10.0 * (1.0 - k);
     let r = Rect::from_min_size(pos2(CX - sz.x * scale / 2.0, top), sz * scale);
-    shadow(&p, r, 12.0, vec2(0.0, 10.0), 30.0, 0.0, rgba(0, 0, 0, 0.5));
     // arrow
     let ac = pos2(CX, r.top());
     let d = 4.5 * scale;

@@ -714,7 +714,6 @@ fn range(app: &mut App, ui: &Ui, p: &Painter, track: Rect, key: &str, val: Optio
     let hk = app.a.v(("knob_h", key), if resp.hovered() || dragging { 1.0 } else { 0.0 }, 0.45, SMOOTH);
     let ks = 0.85 + 0.2 * hk;
     let kc = pos2(track.left() + track.width() * v, track.center().y);
-    shadow(p, Rect::from_center_size(kc, vec2(18.0, 18.0) * ks), 9.0 * ks, vec2(0.0, 2.0), 8.0, 0.0, rgba(0, 0, 0, 0.5));
     p.circle_filled(kc, (9.0 + 4.0) * ks, fade(c1, 0.3));
     p.circle_filled(kc, 9.0 * ks, rgb(0xe9, 0xf6, 0xff));
 }

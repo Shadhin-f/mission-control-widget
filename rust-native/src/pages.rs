@@ -1010,7 +1010,6 @@ fn cleaner(app: &mut App, ui: &mut Ui, page_rect: Rect) {
         let g = fp.layout_job(j);
         let bh = (20.0 + 20.0 + 8.0 + g.size().y + 16.0 + 34.0 + 20.0) * s;
         let br = Rect::from_center_size(cover.center(), vec2(bw, bh));
-        shadow(&fp, br, 16.0, vec2(0.0, 20.0), 60.0, 0.0, rgba(0, 0, 0, 0.6));
         boxed(&fp, br, 16.0, rgb(0x0d, 0x15, 0x27), rgba(255, 77, 109, 0.35));
         let tr = text(&fp, br.min + vec2(20.0, 20.0), Align2::LEFT_TOP, &title, font6(16.0), TEXT, 0.0);
         fp.galley(pos2(br.left() + 20.0, tr.bottom() + 8.0), g, DIM);

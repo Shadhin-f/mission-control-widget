@@ -65,13 +65,16 @@ pub fn set_taskbar_autohide(on: bool) {
 }
 
 // ---------------- layout (logical px; multiplied by the DPI scale) ----------------
-const ICON: f32 = 46.0;
-const GAP: f32 = 8.0;
-const PAD: f32 = 10.0;
-const DOCK_H: f32 = 64.0;
-const MARGIN: f32 = 6.0;
-const MAG: f32 = 1.55;
-const WIN_H: f32 = 150.0;
+const ICON: f32 = 36.0;
+const GAP: f32 = 6.0;
+const PAD: f32 = 7.0;
+const DOCK_H: f32 = 48.0;
+const MARGIN: f32 = 5.0;
+const MAG: f32 = 1.5;
+/// room above the dock for magnified icons and the name label
+const WIN_H: f32 = 108.0;
+/// icon bottom above the dock's bottom edge (the running dot sits in this gap)
+const ICON_LIFT: f32 = 7.0;
 const CALLBACK: u32 = WM_APP + 7;
 const WM_MOUSELEAVE_: u32 = 0x02A3;
 
@@ -109,6 +112,8 @@ struct St {
     dirty: bool,
     hit: Vec<(f32, f32, usize)>,
     pressed: Option<usize>,
+    /// the layered window's bitmap, kept between frames (memory DC, DIB, pixels, w, h)
+    dib: Option<(HDC, HBITMAP, *mut u8, i32, i32)>,
 }
 
 thread_local! {
@@ -334,6 +339,28 @@ unsafe fn hicon_to_pixmap(icon: HICON) -> Option<Pixmap> {
     out
 }
 
+fn prescale(src: &Pixmap, size: u32) -> Pixmap {
+    let side = src.width().max(src.height());
+    if side <= size {
+        return src.clone();
+    }
+    let Some(mut out) = Pixmap::new(size, size) else { return src.clone() };
+    let k = size as f32 / side as f32;
+    // two steps for big downscales keeps it sharp without aliasing
+    let mid = if k < 0.35 { Some(((side as f32) * 0.5).round() as u32) } else { None };
+    let pp = PixmapPaint { quality: tiny_skia::FilterQuality::Bicubic, ..Default::default() };
+    match mid.and_then(|m| Pixmap::new(m, m).map(|p| (m, p))) {
+        Some((m, mut half)) => {
+            let k1 = m as f32 / side as f32;
+            half.draw_pixmap(0, 0, src.as_ref(), &pp, Transform::from_scale(k1, k1), None);
+            let k2 = size as f32 / m as f32;
+            out.draw_pixmap(0, 0, half.as_ref(), &pp, Transform::from_scale(k2, k2), None);
+        }
+        None => out.draw_pixmap(0, 0, src.as_ref(), &pp, Transform::from_scale(k, k), None),
+    }
+    out
+}
+
 /// Opaque bounding box size (some apps only have a small icon inside the 256 px "jumbo" canvas).
 fn content_size(p: &Pixmap) -> u32 {
     let (w, h) = (p.width(), p.height());
@@ -453,7 +480,7 @@ fn stop(pos: f32, r: u8, g: u8, b: u8, a: f32) -> GradientStop {
 
 /// Soft glow: stacked, growing translucent rounded rects.
 fn glow(pm: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, r: f32, rgb: (u8, u8, u8), a: f32, spread: f32) {
-    let n = 6;
+    let n = 3;
     for i in (1..=n).rev() {
         let e = spread * i as f32 / n as f32;
         if let Some(p) = rrect(x - e, y - e, w + 2.0 * e, h + 2.0 * e, r + e) {
@@ -586,10 +613,9 @@ impl St {
         let dock_top = dock_bottom - DOCK_H * k;
         let left = lay[0].0 - PAD * k;
         let right = lay[lay.len() - 1].0 + lay[lay.len() - 1].1 + PAD * k;
-        let rad = 20.0 * k;
+        let rad = 15.0 * k;
         // background: navy glass with the widget's cyan rim and glow
-        glow(&mut pm, left, dock_top, right - left, DOCK_H * k, rad, (62, 243, 255), 0.10, 14.0 * k);
-        glow(&mut pm, left, dock_top + 6.0 * k, right - left, DOCK_H * k, rad, (0, 0, 0), 0.35, 12.0 * k);
+        glow(&mut pm, left, dock_top, right - left, DOCK_H * k, rad, (62, 243, 255), 0.08, 10.0 * k);
         if let Some(p) = rrect(left, dock_top, right - left, DOCK_H * k, rad) {
             pm.fill_path(&p, &vgrad(dock_top, dock_bottom, vec![stop(0.0, 14, 22, 40, 0.94), stop(1.0, 6, 10, 20, 0.96)]), FillRule::Winding, Transform::identity(), None);
             let mut st = Stroke::default();
@@ -606,7 +632,7 @@ impl St {
         let mut hovered: Option<usize> = None;
         let pinned_end = self.items.iter().rposition(|i| i.pinned).unwrap_or(0);
         for (i, ((x, s), it)) in lay.iter().zip(self.items.clone()).enumerate() {
-            let base_y = dock_bottom - 9.0 * k - s;
+            let base_y = dock_bottom - ICON_LIFT * k - s;
             // launch bounce: two hops
             let mut by = 0.0;
             if let Some(t0) = self.bounce.get(&it.key) {
@@ -614,7 +640,7 @@ impl St {
                 if t < 1.1 {
                     let hop = (t / 0.55).floor();
                     let ph = (t % 0.55) / 0.55;
-                    by = -(ph * std::f32::consts::PI).sin() * 16.0 * k * if hop == 0.0 { 1.0 } else { 0.45 };
+                    by = -(ph * std::f32::consts::PI).sin() * 12.0 * k * if hop == 0.0 { 1.0 } else { 0.45 };
                 }
             }
             let y = base_y + by;
@@ -627,7 +653,7 @@ impl St {
                 draw_start(&mut pm, *x, y, *s, hot);
             } else if let Some(Some(icon)) = self.icons.get(&it.key) {
                 let sc = *s / icon.width().max(icon.height()) as f32;
-                let pp = PixmapPaint { quality: tiny_skia::FilterQuality::Bicubic, ..Default::default() };
+                let pp = PixmapPaint { quality: tiny_skia::FilterQuality::Bilinear, ..Default::default() };
                 pm.draw_pixmap(0, 0, icon.as_ref(), &pp, Transform::from_row(sc, 0.0, 0.0, sc, *x, y), None);
             } else {
                 // no icon: a themed tile with the initial
@@ -650,9 +676,9 @@ impl St {
             // running indicator: a cyan dot (wider for the active app)
             if !it.windows.is_empty() {
                 let active = self.active.as_deref() == Some(it.key.as_str());
-                let (dw, dh) = if active { (14.0 * k, 3.0 * k) } else { (4.0 * k, 4.0 * k) };
+                let (dw, dh) = if active { (12.0 * k, 2.5 * k) } else { (3.5 * k, 3.5 * k) };
                 let dx = *x + *s / 2.0 - dw / 2.0;
-                let dy = dock_bottom - 5.5 * k - dh / 2.0;
+                let dy = dock_bottom - 3.5 * k - dh / 2.0;
                 glow(&mut pm, dx, dy, dw, dh, dh / 2.0, (62, 243, 255), 0.35, 4.0 * k);
                 if let Some(p) = rrect(dx, dy, dw, dh, dh / 2.0) {
                     pm.fill_path(&p, &solid(62, 243, 255, 1.0), FillRule::Winding, Transform::identity(), None);
@@ -661,7 +687,7 @@ impl St {
             // separator between pinned and the rest
             if i == pinned_end && i + 1 < self.items.len() {
                 let sx = *x + *s + GAP * k / 2.0;
-                if let Some(p) = rrect(sx - 0.5 * k, dock_top + 14.0 * k, k.max(1.0), (DOCK_H - 28.0) * k, 0.0) {
+                if let Some(p) = rrect(sx - 0.5 * k, dock_top + 11.0 * k, k.max(1.0), (DOCK_H - 22.0) * k, 0.0) {
                     pm.fill_path(&p, &solid(110, 200, 255, 0.22), FillRule::Winding, Transform::identity(), None);
                 }
             }
@@ -671,12 +697,11 @@ impl St {
             if self.mag > 0.6 {
                 let (x, s) = lay[i];
                 let name = self.items[i].name.clone();
-                let fs = 12.0 * k;
+                let fs = 11.5 * k;
                 let tw = text_width(&f, &name, fs);
-                let (lw, lh) = (tw + 20.0 * k, 24.0 * k);
+                let (lw, lh) = (tw + 18.0 * k, 22.0 * k);
                 let lx = (x + s / 2.0 - lw / 2.0).clamp(2.0, wf - lw - 2.0);
-                let ly = dock_bottom - 9.0 * k - s - 10.0 * k - lh;
-                glow(&mut pm, lx, ly + 4.0 * k, lw, lh, 10.0 * k, (0, 0, 0), 0.3, 8.0 * k);
+                let ly = (dock_bottom - ICON_LIFT * k - s - 8.0 * k - lh).max(1.0);
                 if let Some(p) = rrect(lx, ly, lw, lh, 10.0 * k) {
                     pm.fill_path(&p, &solid(10, 16, 30, 0.96), FillRule::Winding, Transform::identity(), None);
                     let mut st = Stroke::default();
@@ -689,29 +714,38 @@ impl St {
         self.present(&pm);
     }
 
-    fn present(&self, pm: &Pixmap) {
+    fn present(&mut self, pm: &Pixmap) {
         let (x, y, w, h) = self.win_rect;
-        // RGBA premultiplied -> BGRA premultiplied
-        let mut buf: Vec<u8> = pm.data().to_vec();
-        for c in buf.chunks_mut(4) {
-            c.swap(0, 2);
-        }
         unsafe {
-            let screen = GetDC(None);
-            let mem = CreateCompatibleDC(Some(screen));
-            let bmi = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
-            let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-            if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
-                std::ptr::copy_nonoverlapping(buf.as_ptr(), bits as *mut u8, buf.len());
-                let old = SelectObject(mem, bmp.into());
-                let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
-                let (pt, sz, src) = (POINT { x, y }, SIZE { cx: w, cy: h }, POINT::default());
-                let _ = UpdateLayeredWindow(self.hwnd, Some(screen), Some(&pt), Some(&sz), Some(mem), Some(&src), COLORREF(0), Some(&blend), ULW_ALPHA);
-                SelectObject(mem, old);
-                let _ = DeleteObject(bmp.into());
+            // one DIB for the window's size, reused every frame
+            if !matches!(self.dib, Some((_, _, _, dw, dh)) if dw == w && dh == h) {
+                if let Some((dc, bmp, _, _, _)) = self.dib.take() {
+                    let _ = DeleteObject(bmp.into());
+                    let _ = DeleteDC(dc);
+                }
+                let mem = CreateCompatibleDC(None);
+                let bmi = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
+                let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+                let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) else {
+                    let _ = DeleteDC(mem);
+                    return;
+                };
+                SelectObject(mem, bmp.into());
+                self.dib = Some((mem, bmp, bits as *mut u8, w, h));
             }
-            let _ = DeleteDC(mem);
-            ReleaseDC(None, screen);
+            let Some((mem, _, bits, _, _)) = self.dib else { return };
+            // RGBA premultiplied -> BGRA premultiplied, straight into the DIB
+            let src = pm.data();
+            let dst = std::slice::from_raw_parts_mut(bits, src.len());
+            for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+                d[0] = s[2];
+                d[1] = s[1];
+                d[2] = s[0];
+                d[3] = s[3];
+            }
+            let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
+            let (pt, sz, sp) = (POINT { x, y }, SIZE { cx: w, cy: h }, POINT::default());
+            let _ = UpdateLayeredWindow(self.hwnd, None, Some(&pt), Some(&sz), Some(mem), Some(&sp), COLORREF(0), Some(&blend), ULW_ALPHA);
         }
     }
 
@@ -720,7 +754,7 @@ impl St {
         let n = self.items.len().max(1) as f32;
         let base_w = n * ICON * k + (n - 1.0) * GAP * k + 2.0 * PAD * k;
         // room for magnified icons and labels on both sides
-        let w = (base_w + 2.0 * 160.0 * k).min((self.mon.right - self.mon.left) as f32) as i32;
+        let w = (base_w + 2.0 * 120.0 * k).min((self.mon.right - self.mon.left) as f32) as i32;
         let h = (WIN_H * k) as i32;
         let x = self.mon.left + ((self.mon.right - self.mon.left) - w) / 2;
         let y = self.mon.bottom - h;
@@ -745,7 +779,7 @@ impl St {
             }
             if self.appbar {
                 // reserve a full-width strip at the bottom, as tall as the dock
-                let reserve = ((DOCK_H + MARGIN + 4.0) * self.k()) as i32;
+                let reserve = ((DOCK_H + MARGIN + 3.0) * self.k()) as i32;
                 d.uEdge = ABE_BOTTOM;
                 d.rc = RECT { left: self.mon.left, right: self.mon.right, top: self.mon.bottom - reserve, bottom: self.mon.bottom };
                 SHAppBarMessage(ABM_QUERYPOS, &mut d);
@@ -988,6 +1022,7 @@ fn run(rx: Receiver<Msg>) {
                 dirty: true,
                 hit: vec![],
                 pressed: None,
+                dib: None,
             })
         });
         let mut names: HashMap<String, String> = HashMap::new();
@@ -1005,8 +1040,19 @@ fn run(rx: Receiver<Msg>) {
             })
             .unwrap_or(false);
             let on = with(|s| s.on).unwrap_or(false);
-            let wait = if animating { 8 } else if on { 120 } else { 1000 };
-            match rx.recv_timeout(Duration::from_millis(wait)) {
+            // While animating, wait for the compositor's next frame (vsync) rather than sleeping: Windows'
+            // default timer granularity (15.6 ms) would make the motion uneven.
+            let msg = if animating {
+                let _ = windows::Win32::Graphics::Dwm::DwmFlush();
+                match rx.try_recv() {
+                    Ok(m) => Ok(m),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => Err(RecvTimeoutError::Timeout),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(RecvTimeoutError::Disconnected),
+                }
+            } else {
+                rx.recv_timeout(Duration::from_millis(if on { 120 } else { 1000 }))
+            };
+            match msg {
                 Ok(Msg::On(v)) => {
                     with(|s| {
                         s.on = v;
@@ -1044,6 +1090,10 @@ fn run(rx: Receiver<Msg>) {
                             if std::env::var_os("MC_DOCK_DEBUG").is_some() {
                                 eprintln!("[dock] {:?} key={} launch={:?} windows={} icon={:?}", it.name, it.key, it.launch, it.windows.len(), icon.as_ref().map(|p| (p.width(), content_size(p))));
                             }
+                            // pre-scale once to the largest size it is drawn at, so each frame only does a
+                            // small, cheap resample (smooth magnification even with big 256 px icons)
+                            let target = (ICON * MAG * s.scale).ceil() as u32 + 2;
+                            let icon = icon.map(|i| prescale(&i, target));
                             s.icons.insert(it.key.clone(), icon);
                         }
                     }
@@ -1090,7 +1140,11 @@ fn run(rx: Receiver<Msg>) {
                 }
                 if moving || s.dirty {
                     s.dirty = false;
+                    let t0 = Instant::now();
                     s.render();
+                    if std::env::var_os("MC_DOCK_DEBUG").is_some() {
+                        eprintln!("[dock] frame {:.2} ms", t0.elapsed().as_secs_f64() * 1000.0);
+                    }
                 }
             });
         }
