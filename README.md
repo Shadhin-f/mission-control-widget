@@ -219,8 +219,8 @@ one edition at a time, because both sit in the same spot at the top of the scree
 > been run on a Mac yet. Reports are welcome.
 
 **No build needed:** to just install the Rust edition, use the installers in
-[`installers/`](installers/README.md): `Mission Control_1.0.0_x64-setup.exe` for Windows and
-`Mission Control_1.0.0_aarch64.dmg` for Apple Silicon Macs. The steps below are for building it
+[`installers/`](installers/README.md): `Mission Control_1.1.0_x64-setup.exe` for Windows and
+`Mission Control_1.1.0_aarch64.dmg` for Apple Silicon Macs. The steps below are for building it
 yourself.
 
 #### Windows
@@ -273,7 +273,7 @@ npm run build
 This creates:
 
 - `src-tauri\target\release\mission-control.exe`: the app itself, which you can run directly
-- `src-tauri\target\release\bundle\nsis\Mission Control_1.0.0_x64-setup.exe`: an installer that
+- `src-tauri\target\release\bundle\nsis\Mission Control_1.1.0_x64-setup.exe`: an installer that
   adds it to the Start menu (no admin rights needed)
 
 **Launch at startup** uses the same **Mission Control** Task Scheduler task as the Electron
