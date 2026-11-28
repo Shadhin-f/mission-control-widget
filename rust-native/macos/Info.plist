@@ -5,5 +5,9 @@
   <!-- A menu bar style app: no Dock icon -->
   <key>LSUIElement</key>
   <true/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Control appearance, media playback and session actions when you request them.</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Show paired Bluetooth devices and their connection status.</string>
 </dict>
 </plist>
