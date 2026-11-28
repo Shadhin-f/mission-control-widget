@@ -48,7 +48,7 @@ The Tauri macOS installer above was produced by CI (the `Rust edition` workflow 
 ```
 8d1234607d980d8ef31ce0bc0ed8d315cfa88000869335579697876f0c48a8f9  Mission Control Native_1.0.0_aarch64.dmg
 1c6409394a66bd5cc39ac74b2a25f60949649e05b78811376d21c4c4ed562c4f  Mission Control_1.1.0_x64-setup.exe
-c272667a5b57ac7c540df4cefb3a6c18485b1e9a04e361e97e36bf439c88bf8d  Mission Control Native_1.0.0_x64-setup.exe
+43603a9ea3d98625cc078727f51513e930ecb2ff69b67feecb3a41a2bcfd0eb3  Mission Control Native_1.0.0_x64-setup.exe
 5e58b20320f4a3fa7f22baa1b055b75516296b98a45026aa22abb8176744a6c7  Mission Control_1.1.0_aarch64.dmg
 ```
 

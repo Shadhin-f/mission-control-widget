@@ -268,6 +268,7 @@ fn compute(s: &mut Snapshot, r: &hw::Reading, cfg: &Cfg, cpu_util: f32, threads:
         load: None,
     });
 
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut measured_dc = false;
     s.source_note.clear();
     #[cfg(target_os = "macos")]
