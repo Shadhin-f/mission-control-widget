@@ -187,6 +187,7 @@ pub struct App {
     pub styled: bool,
     #[cfg(windows)]
     pub edge: crate::edge::Edge,
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub edge_on: bool,
     pub tray: Option<crate::tray::Tray>,
     pub greeted: bool,
@@ -464,7 +465,9 @@ impl App {
         let Some((x, y, w, _h)) = crate::platform::work_area() else { return };
         let pw = (WIN_W * ppp).round() as f64;
         let ph = ((if self.win_full { WIN_H } else { SMALL_H }) * ppp).round() as f64;
-        let px = (x + (w - pw) / 2.0).round();
+        // dev only: MC_DEV_OFFSET_X shifts a test copy sideways so it doesn't sit on an installed one
+        let dev_dx = std::env::var("MC_DEV_OFFSET_X").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+        let px = (x + (w - pw) / 2.0 + dev_dx).round();
         let py = y;
         self.ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2((px / ppp as f64) as f32, (py / ppp as f64) as f32)));
         self.ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2((pw / ppp as f64) as f32, (ph / ppp as f64) as f32)));
@@ -503,7 +506,13 @@ impl App {
     fn set_interactive(&mut self, v: bool) {
         if v != self.interactive {
             self.interactive = v;
-            self.ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(!v));
+            if cfg!(target_os = "macos") {
+                self.ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(!v));
+            }
+        }
+        #[cfg(windows)]
+        if let Some(h) = self.native_handle {
+            crate::platform::set_click_through(h, !self.interactive);
         }
     }
 
@@ -902,7 +911,9 @@ impl eframe::App for App {
                 crate::platform::style_widget(h);
             }
             self.place();
-            ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(true));
+            if cfg!(target_os = "macos") {
+                ctx.send_viewport_cmd(ViewportCommand::MousePassthrough(true));
+            }
         }
         // focus / blur
         let focused = ctx.input(|i| i.viewport().focused).unwrap_or(false);

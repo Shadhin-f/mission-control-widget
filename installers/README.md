@@ -7,6 +7,7 @@ developer tools to use them.
 | --- | --- | --- |
 | `Mission Control_1.0.0_x64-setup.exe` | Windows 10 / 11, 64-bit | 1.9 MB |
 | `Mission Control_1.0.0_aarch64.dmg` | macOS 12+ on Apple Silicon (M1 and later) | 2.9 MB |
+| `Mission Control Native_1.0.0_x64-setup.exe` | Windows 10 / 11, 64-bit: the [pure Rust edition](../rust-native/README.md) (no web view) | 3.9 MB |
 
 There is no Intel Mac build yet. On an Intel Mac, build from source (see the main README).
 
@@ -38,6 +39,7 @@ doesn't, the installer downloads it during setup.
 
 ```
 9f3fbb5b2c5ab6e6deaeeb2f90732dbbdaff3f9503540b0d96b417e7bb5205f8  Mission Control_1.0.0_x64-setup.exe
+85f095d42c1d0d534e055fe1bf2e337e07dfc290a9265f5da92c7fad611ee7ae  Mission Control Native_1.0.0_x64-setup.exe
 b5681db6bf8055fe4f9fedb61f069996432a2d5b197ea7348e9d26b9588c8ae8  Mission Control_1.0.0_aarch64.dmg
 ```
 

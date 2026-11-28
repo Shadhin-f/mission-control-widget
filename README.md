@@ -6,6 +6,10 @@
 interface and features in a 5 MB app instead of Electron's ~300 MB. **Just want to install it?** Ready-made installers for
 Windows and Apple Silicon Macs are in [`installers/`](installers/README.md); no developer tools needed.
 
+**Pure Rust edition:** [`rust-native/`](rust-native/README.md) draws the same interface natively on the GPU (egui), with
+no web view at all: a 3.9 MB installer, about 87 MB of memory instead of ~364 MB, and a Credits tab with the project's
+contributors.
+
 A futuristic system widget for Windows and macOS that hangs from the top-center of your screen like a notch,
 with an animated robot pet, live PC stats, device controls, internet speed tests, a cache cleaner,
 and a built-in AI chat that can control your PC through
@@ -81,6 +85,7 @@ and a built-in AI chat that can control your PC through
 - [Windows](#windows)
 - [macOS](#macos-quick-start)
 - [Rust edition (Windows and macOS)](#rust-edition-windows-and-macos): the same widget as a 5 MB native app
+- [Pure Rust edition](rust-native/README.md): no web view at all, natively drawn interface
 
 ### Windows
 

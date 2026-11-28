@@ -1,0 +1,15 @@
+{
+  "productName": "Mission Control Native",
+  "version": "1.0.0",
+  "identifier": "com.missioncontrol.widget.native",
+  "description": "Futuristic top-centre widget with an animated pet, live Mac stats and more (pure Rust edition)",
+  "authors": ["Mission Control contributors"],
+  "category": "Utility",
+  "outDir": "dist",
+  "beforePackagingCommand": "cargo build --release",
+  "binaries": [{ "path": "mission-control", "main": true }],
+  "icons": ["../rust/src-tauri/icons/icon.icns", "../rust/src-tauri/icons/icon.png"],
+  "formats": ["app", "dmg"],
+  "resources": [{ "src": "helper/MissionControlHelper.app", "target": "MissionControlHelper.app" }],
+  "macos": { "minimumSystemVersion": "12.0", "infoPlistPath": "macos/Info.plist" }
+}

@@ -24,11 +24,27 @@ mod imp {
 
     /// A tool window: no taskbar button and not in Alt+Tab, like Electron's "toolbar" window type.
     pub fn style_widget(hwnd: isize) {
+        set_click_through(hwnd, true);
+    }
+
+    /// Click-through on or off. A click-through window must be layered + transparent; a layered window
+    /// only shows what it draws once SetLayeredWindowAttributes has been called, so do that every time.
+    /// Cheap enough to call every frame: it only writes when something changed (winit rewrites the
+    /// extended style whenever one of its own flags changes).
+    pub fn set_click_through(hwnd: isize, through: bool) {
         unsafe {
             let h = HWND(hwnd as *mut _);
             let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
-            let ex = (ex | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
-            SetWindowLongPtrW(h, GWL_EXSTYLE, ex);
+            let mut n = (ex | WS_EX_LAYERED.0 as isize | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+            if through {
+                n |= WS_EX_TRANSPARENT.0 as isize;
+            } else {
+                n &= !(WS_EX_TRANSPARENT.0 as isize);
+            }
+            if n != ex {
+                SetWindowLongPtrW(h, GWL_EXSTYLE, n);
+                let _ = SetLayeredWindowAttributes(h, windows::Win32::Foundation::COLORREF(0), 255, LWA_ALPHA);
+            }
         }
     }
 

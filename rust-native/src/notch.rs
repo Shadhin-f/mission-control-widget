@@ -902,11 +902,13 @@ fn draw_bubble(app: &mut App, ui: &mut Ui) {
     }
     let mut p = ui.painter().clone();
     p.set_opacity(o);
+    // shrink-to-fit up to max-width 360, centred lines
+    let natural = galley(&p, &b.text, font(11.5), TEXT, 0.0).size().x;
     let mut j = job(&b.text, font(11.5), TEXT, 0.0);
-    j.wrap.max_width = 360.0 - 28.0;
+    j.wrap.max_width = natural.min(360.0 - 28.0) + 0.5;
     j.halign = egui::Align::Center;
     let g = p.layout_job(j);
-    let sz = g.size() + vec2(28.0, 16.0);
+    let sz = g.rect.size() + vec2(28.0, 16.0);
     let scale = 0.92 + 0.08 * k;
     let top = 56.0 - 10.0 * (1.0 - k);
     let r = Rect::from_min_size(pos2(CX - sz.x * scale / 2.0, top), sz * scale);
@@ -920,7 +922,8 @@ fn draw_bubble(app: &mut App, ui: &mut Ui) {
     // re-cover the border under the arrow, then stroke the arrow's two sides
     p.line_segment([ac + vec2(-d + 0.5, 0.5), ac + vec2(d - 0.5, 0.5)], Stroke::new(1.5, rgba(10, 16, 30, 0.96)));
     p.add(Shape::line(arrow, Stroke::new(1.0, LINE2)));
-    p.galley(r.center() - g.size() / 2.0, g, TEXT);
+    let off = g.rect.center().to_vec2();
+    p.galley(r.center() - off, g, TEXT);
 }
 
 fn draw_toast(app: &mut App, ui: &mut Ui) {
