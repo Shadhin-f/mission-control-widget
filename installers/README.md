@@ -38,14 +38,14 @@ doesn't, the installer downloads it during setup.
 
 For the native egui app with no webview, download **`Mission Control Native_1.0.0_aarch64.dmg`** instead. Open the image and drag **Mission Control Native** to Applications. Its bundle identifier is `com.missioncontrol.widget.native`; it is distinct from the Tauri app above. The local build is ad-hoc signed, not notarized.
 
-This installer was compiled from `rust-native` and tested on an Apple M4 running macOS 27.0.1. Checks covered bundle/helper signatures, six read-only native queries, all ten UI screens and normal exit with isolated settings and startup disabled. Older macOS versions, Intel hardware, destructive controls and AI message sending were not run-tested. Reproduce the build and smoke checks with the [native edition instructions](../rust-native/README.md#build-from-source).
+This installer was compiled from `rust-native` and tested on an Apple M4 running macOS 27.0.1. The Mac build includes the Power tab with battery/adapter telemetry, cost projections, history and calibration; component and wall-power estimates are labelled. Six regression tests passed. Checks covered bundle/helper signatures, seven read-only native queries, all eleven UI screens (including Power) and normal exit with isolated settings and startup disabled. Older macOS versions, Intel hardware, destructive controls and AI message sending were not run-tested. Reproduce the build and smoke checks with the [native edition instructions](../rust-native/README.md#build-from-source).
 
 The older Tauri macOS installer above was produced by CI and has not been hand-tested here.
 
 ## Checksums (SHA-256)
 
 ```
-2993652b9a9f8f1ad3aa6dc84502766017953709b2ba56e4980b4fe8a1d7349e  Mission Control Native_1.0.0_aarch64.dmg
+8d1234607d980d8ef31ce0bc0ed8d315cfa88000869335579697876f0c48a8f9  Mission Control Native_1.0.0_aarch64.dmg
 9f3fbb5b2c5ab6e6deaeeb2f90732dbbdaff3f9503540b0d96b417e7bb5205f8  Mission Control_1.0.0_x64-setup.exe
 97a440e383426a8e10b7ff90aed5dbae2597ff67ad011501024c0a2eeeb49a8b  Mission Control Native_1.0.0_x64-setup.exe
 b5681db6bf8055fe4f9fedb61f069996432a2d5b197ea7348e9d26b9588c8ae8  Mission Control_1.0.0_aarch64.dmg
