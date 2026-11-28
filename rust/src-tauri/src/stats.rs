@@ -183,6 +183,11 @@ impl Stats {
                     adapter = serde_json::to_value(&n.adapter).unwrap_or(Value::Null);
                 }
                 let total = sys.total_memory() as f64;
+                // On macOS, available_memory subtracts compressed pages and can saturate at zero
+                // even with reclaimable inactive RAM. Use the OS-backed physical-used count instead.
+                #[cfg(target_os = "macos")]
+                let used = (sys.used_memory() as f64).min(total);
+                #[cfg(not(target_os = "macos"))]
                 let used = total - sys.available_memory() as f64;
                 let payload = json!({
                     "t": now,

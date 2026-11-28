@@ -20,10 +20,8 @@ Measured on one Windows 11 PC (i5-12400, RTX 3060), widget collapsed, same setti
 - **Windows:** run `installers/Mission Control Native_1.0.0_x64-setup.exe`. It installs for your
   user account only (no admin rights). SmartScreen may warn because the installer isn't code-signed:
   click **More info**, then **Run anyway**.
-- **macOS:** the `.dmg` files (Apple Silicon and Intel) are built by the
-  [Pure Rust edition workflow](../.github/workflows/rust-native.yml) on GitHub's Mac runners; download
-  them from that workflow run's artifacts, open the dmg and drag **Mission Control Native** into
-  Applications. The app isn't notarized: the first time, Control-click it and choose **Open**.
+- **macOS (Apple Silicon):** download [`Mission Control Native_1.0.0_aarch64.dmg`](../installers/Mission%20Control%20Native_1.0.0_aarch64.dmg), open it and drag **Mission Control Native** into Applications. This is the pure Rust/egui build, distinct from the older Tauri installer named `Mission Control_...dmg`. The local build is ad-hoc signed and is not Apple-notarized; macOS may require approval in Privacy & Security before first use.
+- **Intel Mac:** build locally on an Intel Mac with the script below; no tested Intel installer is included.
 
 Run only one edition at a time: they all sit in the same spot at the top of the screen, share one
 settings file and use the same "launch at startup" entry.
@@ -62,8 +60,20 @@ cargo packager --release          # Windows: dist\mission-control_1.0.0_x64-setu
 ```
 
 ```bash
-cargo packager --release -c "$(cat packager-macos.json)"   # macOS: .app and .dmg in dist/
+./scripts/package-macos.sh   # macOS: signed app inside dist/Mission Control Native_<version>_<arch>.dmg
 ```
+
+The local packaging script uses only Cargo and macOS's bundled signing/disk-image tools. It stages the app outside synced folders, includes the Swift helper and icon, verifies signatures and architecture, and verifies the disk image. It does not need a GitHub Actions workflow or Node.js. `packager-macos.json` remains available for cargo-packager users.
+
+### Test a Mac build
+
+Mount the generated DMG, then run:
+
+```bash
+python3 scripts/test-macos.py "/Volumes/Mission Control Native/Mission Control Native.app" --report-dir /tmp/mission-control-native-test
+```
+
+This verifies the bundle and six read-only native helper queries, captures all UI pages, and checks a normal timed exit. It uses an isolated temporary settings directory and disables startup registration and system theming. It does not exercise destructive actions, send AI prompts, run a speed test or install the app. Apple Silicon was built and tested on macOS 27.0.1; older macOS releases and Intel hardware have not been run-tested.
 
 ## How it is built
 
