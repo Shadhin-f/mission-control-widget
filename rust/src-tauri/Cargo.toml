@@ -1,6 +1,6 @@
 [package]
 name = "mission-control"
-version = "1.0.0"
+version = "1.1.0"
 description = "Mission Control widget: Rust (Tauri) edition"
 license = "MIT"
 edition = "2021"
