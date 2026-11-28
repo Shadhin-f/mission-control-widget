@@ -5,7 +5,29 @@ The same widget with **no web view at all**: the interface is drawn natively on 
 behaves like the other editions: the same notch, pet and moods, tabs, charts, controls, chat, cleaner
 and Extreme mode, with the same sizes, colours, easing curves and timings (ported from
 `renderer/styles.css` and `renderer/app.js`). It adds a **Credits** tab listing the project's GitHub
-contributors.
+contributors, and a **Power** tab (Windows): live power draw and what it costs per day, week, month
+and year.
+
+## Power and electricity cost
+
+The Power tab works on any Windows PC. It detects the CPU and every graphics adapter, and reads each
+part's power from the best source available:
+
+| Part | Source |
+| --- | --- |
+| CPU | Windows' energy meter (the CPU's own power sensors) where the CPU exposes it, which most Intel CPUs do; otherwise load × typical power for its thread count |
+| NVIDIA GPUs | NVIDIA's driver library (`nvml.dll`, installed with the driver) |
+| AMD, Intel Arc and other GPUs | Load (from Windows' GPU counters, any vendor) × typical power for the card's memory size |
+| Built-in graphics | Counted inside the CPU's reading (estimated with it when that isn't available) |
+| Laptop battery | Charge rate while plugged in; the real drain while on battery |
+| Motherboard, RAM, drives, fans; power supply loss; monitors | Typical values, adjustable, or calibrated against a plug-in power meter |
+
+Every figure is labelled measured, estimated or "your value", and the page shows what share of the
+total is measured. Energy drawn from the wall is added up per day in `power-log.json` next to the
+settings, which gives actual totals; projections use the average power while the PC is on × the hours
+it is on per day (learned from past days, 8 h until a full day is tracked, or your setting). It counts
+while the app runs, including while the widget idles during fullscreen games. Accuracy is roughly
+10–20% against a wall meter on a desktop with a measured CPU and GPU, better after calibrating.
 
 | | Electron edition | Pure Rust edition |
 | --- | --- | --- |
@@ -107,4 +129,7 @@ This verifies the bundle and six read-only native helper queries, captures all U
 | `MC_NO_AI=1` | Preview the layout without Claude Code / Codex |
 | `MC_DEV_QUIT_AFTER=<s>` | Quit normally after that many seconds (tests that Extreme mode restores everything) |
 | `MC_DOCK_DEBUG=1` | Log the dock's apps and how their icons resolved |
+| `MC_SHOTS_WAIT=<s>`, `MC_SHOTS_SCROLL=<px>` | With `MC_SHOTS`: wait before the first shot (default 6 s; ~100 fills the charts) / hold pages scrolled down |
+| `MC_DIAG_POWER=1` | Log every power reading: each part, its source, the totals and projections |
+| `MC_POWER_ESTIMATE=1` | Ignore the CPU and NVIDIA sensors, to see what a PC without them gets |
 | `MC_DIAG_FPS=1`, `MC_DIAG_ANIM=1` | Log every frame / every running animation (to find what keeps the widget repainting) |

@@ -59,6 +59,8 @@ mod notch;
 mod pages;
 mod platform;
 mod pointer;
+mod power;
+mod power_page;
 mod shots;
 mod theme;
 mod tray;

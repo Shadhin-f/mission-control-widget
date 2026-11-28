@@ -249,6 +249,49 @@ pub fn stroke_colored(p: &Painter, pts: &[Pos2], cols: &[Color32], w: f32) {
     p.circle_filled(pts[n - 1], w / 2.0, cols[n - 1]);
 }
 
+/// A smooth stroke built as one mesh. `profile` lists (offset from the centre line, colour) across its width,
+/// so a single call draws a soft glow or an anti-aliased core with a hot centre; `alpha` fades each point.
+/// Normals are averaged at the joins (with a limited miter), so dense curves get no seams, beads or spikes,
+/// unlike stacking wide translucent polylines.
+pub fn ribbon(p: &Painter, pts: &[Pos2], alpha: &[f32], profile: &[(f32, Color32)]) {
+    let (n, m) = (pts.len(), profile.len());
+    if n < 2 || m < 2 {
+        return;
+    }
+    let mut mesh = Mesh::default();
+    mesh.reserve_vertices(n * m);
+    mesh.reserve_triangles((n - 1) * (m - 1) * 2);
+    let dir = |a: Pos2, b: Pos2| {
+        let d = b - a;
+        let l = d.length();
+        if l > 1e-4 { d / l } else { Vec2::ZERO }
+    };
+    let mut last_t = vec2(1.0, 0.0);
+    for i in 0..n {
+        let d0 = if i > 0 { dir(pts[i - 1], pts[i]) } else { Vec2::ZERO };
+        let d1 = if i + 1 < n { dir(pts[i], pts[i + 1]) } else { Vec2::ZERO };
+        let s = d0 + d1;
+        let t = if s.length_sq() > 1e-8 { s.normalized() } else { last_t };
+        last_t = t;
+        let mut nrm = vec2(-t.y, t.x);
+        if d0 != Vec2::ZERO && d1 != Vec2::ZERO {
+            nrm /= nrm.dot(vec2(-d1.y, d1.x)).max(0.65);
+        }
+        let a = alpha.get(i).copied().unwrap_or(1.0);
+        for (o, c) in profile {
+            mesh.colored_vertex(pts[i] + nrm * *o, if a >= 1.0 { *c } else { fade(*c, a) });
+        }
+        if i > 0 {
+            let (b0, b1) = (((i - 1) * m) as u32, (i * m) as u32);
+            for k in 0..(m - 1) as u32 {
+                mesh.add_triangle(b0 + k, b1 + k, b0 + k + 1);
+                mesh.add_triangle(b1 + k, b1 + k + 1, b0 + k + 1);
+            }
+        }
+    }
+    p.add(Shape::mesh(mesh));
+}
+
 // ---------------- text ----------------
 
 pub fn job(text: &str, font: FontId, color: Color32, spacing: f32) -> LayoutJob {

@@ -119,12 +119,18 @@ fn page(app: &mut App, ui: &mut Ui, t: Tab, rect: Rect, room: f32) -> f32 {
     let inner = Rect::from_min_size(rect.min + vec2(18.0, 14.0), vec2(PAGE_W, room - 32.0));
     let mut cu = ui.new_child(UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
     cu.spacing_mut().item_spacing = vec2(12.0, 12.0);
-    let out = egui::ScrollArea::vertical().id_salt(("scroll", t)).max_height(room - 32.0).auto_shrink([false, true]).show(&mut cu, |ui| {
+    let mut sa = egui::ScrollArea::vertical().id_salt(("scroll", t)).max_height(room - 32.0).auto_shrink([false, true]);
+    // dev: MC_SHOTS_SCROLL=<px> holds pages scrolled down, to capture what's below the fold
+    if let Some(off) = std::env::var("MC_SHOTS_SCROLL").ok().and_then(|v| v.parse::<f32>().ok()) {
+        sa = sa.vertical_scroll_offset(off);
+    }
+    let out = sa.show(&mut cu, |ui| {
         ui.set_width(PAGE_W);
         match t {
             Tab::Overview => overview(app, ui),
             Tab::Controls => crate::controls::page(app, ui),
             Tab::Network => network(app, ui),
+            Tab::Power => crate::power_page::page(app, ui),
             Tab::Apps => apps(app, ui),
             Tab::Cleaner => cleaner(app, ui, rect),
             Tab::Settings => settings(app, ui),
@@ -256,9 +262,9 @@ fn overview(app: &mut App, ui: &mut Ui) {
     let h = card_h(&p, lr, "Load history");
     legend(&p, h, &[(CYAN, "CPU"), (VIOLET, "RAM"), (GREEN, "GPU")]);
     let canvas = Rect::from_min_size(pos2(lr.left() + 14.0, h.bottom() + 8.0), vec2(lw - 28.0, 100.0));
-    let frac = ((app.now - app.last_push) as f32).clamp(0.0, 1.0);
+    let sc = app.chart_scroll();
     let hist = &app.hist;
-    chart(&p, canvas, &[(&hist.cpu, CYAN, rgba(62, 243, 255, 0.16)), (&hist.ram, VIOLET, rgba(155, 123, 255, 0.10)), (&hist.gpu, GREEN, rgba(68, 255, 168, 0.08))], 100.0, frac, None);
+    chart(&p, canvas, &[(&hist.ram, VIOLET, rgba(155, 123, 255, 0.10)), (&hist.gpu, GREEN, rgba(68, 255, 168, 0.08)), (&hist.cpu, CYAN, rgba(62, 243, 255, 0.14))], 100.0, sc, 2, None);
     let cr_ = Rect::from_min_size(pos2(lr.right() + 12.0, row.top()), vec2(250.0, 146.0));
     card(&p, cr_);
     let h = card_h(&p, cr_, "Threads");
@@ -392,42 +398,153 @@ fn gauge(app: &mut App, p: &Painter, r: Rect, name: &str, pct: f32, sub: &str, b
     text_fit(p, pos2(r.center().x, r.top() + 12.0 + 88.0 + 6.0), Align2::CENTER_TOP, sub, font(10.5), DIM, 0.0, r.width() - 16.0);
 }
 
-/// The scrolling line chart (canvas Chart class): smooth bezier lines with a glow and a gradient fill.
-pub fn chart(p: &Painter, r: Rect, series: &[(&std::collections::VecDeque<f32>, Color32, Color32)], max: f32, frac: f32, label: Option<String>) {
+/// Scroll state shared by the history charts (see `App::chart_scroll`).
+#[derive(Clone, Copy)]
+pub struct Scroll {
+    /// How many sample steps the newest point still sits beyond the right edge (eases down towards 0).
+    pub lag: f32,
+    /// Samples pushed so far: anchors the scrolling grid to the data.
+    pub count: u64,
+    /// Clock for the pulse and scan animations, in seconds.
+    pub t: f32,
+}
+
+fn smooth01(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// The scrolling line chart: lightly smoothed samples drawn as monotone cubic curves (no overshoot), each
+/// with a soft glow ribbon, a hot core, a gradient fill with scrolling scan hatching and a pulsing head.
+/// Behind them: a grid that scrolls with the data and a slow scan beam. `smooth` is the number of
+/// [1 2 1] smoothing passes (0 = raw). Every animated part is continuous: new samples ease in off the
+/// right edge and old ones leave off the left, so nothing ever snaps.
+pub fn chart(p: &Painter, r: Rect, series: &[(&std::collections::VecDeque<f32>, Color32, Color32)], max: f32, sc: Scroll, smooth: usize, label: Option<String>) {
     let cp = p.clone().with_clip_rect(r.intersect(p.clip_rect()));
-    for i in 1..4 {
-        let y = (r.top() + r.height() * i as f32 / 4.0).round() + 0.5;
-        cp.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(1.0, rgba(110, 200, 255, 0.07)));
-    }
     let (w, h) = (r.width(), r.height());
     let step = w / (HIST as f32 - 2.0);
-    for (d, color, fillc) in series {
-        if d.len() < 2 {
+    let lag = sc.lag.max(0.0);
+    let x_of = |k: f32| r.right() + (lag - k) * step;
+    let y_of = |v: f32| r.bottom() - 4.0 - (v.max(0.0).min(max * 1.5) / max) * (h - 10.0);
+    let edge_fade = |x: f32| smooth01((x - r.left()) / 42.0);
+
+    // ---- backdrop: horizontal grid, data-anchored vertical grid, scan beam ----
+    for i in 1..4 {
+        let y = (r.top() + h * i as f32 / 4.0).round() + 0.5;
+        cp.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(1.0, rgba(110, 200, 255, 0.07)));
+        cp.line_segment([pos2(r.right() - 4.0, y), pos2(r.right(), y)], Stroke::new(1.0, rgba(110, 200, 255, 0.3)));
+    }
+    let mut grid = egui::Mesh::default();
+    for k in 0..HIST as u64 + 3 {
+        if sc.count < k || (sc.count - k) % 10 != 0 {
             continue;
         }
+        let x = x_of(k as f32);
+        if x < r.left() - 1.0 || x > r.right() + 1.0 {
+            continue;
+        }
+        let a = edge_fade(x);
+        let (top, mid, bot) = (rgba(110, 200, 255, 0.0), fade(rgba(110, 200, 255, 0.07), a), fade(rgba(110, 200, 255, 0.16), a));
+        let b = grid.vertices.len() as u32;
+        for (y, c) in [(r.top(), top), (r.center().y, mid), (r.bottom(), bot)] {
+            grid.colored_vertex(pos2(x - 0.5, y), c);
+            grid.colored_vertex(pos2(x + 0.5, y), c);
+        }
+        for s in 0..2 {
+            let o = b + s * 2;
+            grid.add_triangle(o, o + 1, o + 2);
+            grid.add_triangle(o + 1, o + 3, o + 2);
+        }
+        // a brighter tick on the baseline
+        cp.line_segment([pos2(x, r.bottom() - 3.0), pos2(x, r.bottom())], Stroke::new(1.0, fade(rgba(110, 200, 255, 0.45), a)));
+    }
+    cp.add(Shape::mesh(grid));
+    {
+        let period = 7.0;
+        let s = (sc.t / period).fract();
+        let bw = 90.0;
+        let x = r.left() - bw + s * (w + bw * 2.0);
+        let k = smooth01(s * 6.0) * smooth01((1.0 - s) * 6.0);
+        let c = fade(rgba(62, 243, 255, 0.045), k);
+        let mut m = egui::Mesh::default();
+        for (dx, col) in [(-bw, Color32::TRANSPARENT), (0.0, c), (2.0, Color32::TRANSPARENT)] {
+            m.colored_vertex(pos2(x + dx, r.top()), col);
+            m.colored_vertex(pos2(x + dx, r.bottom()), col);
+        }
+        for o in [0u32, 2] {
+            m.add_triangle(o, o + 1, o + 2);
+            m.add_triangle(o + 1, o + 3, o + 2);
+        }
+        cp.add(Shape::mesh(m));
+        cp.line_segment([pos2(x, r.top()), pos2(x, r.bottom())], Stroke::new(1.0, fade(rgba(62, 243, 255, 0.15), k)));
+    }
+
+    // ---- series ----
+    let mut heads = Vec::new();
+    let mut peak: Option<(Pos2, Color32)> = None;
+    for (si, (d, color, fillc)) in series.iter().enumerate() {
         let n = d.len();
-        let pts: Vec<Pos2> = d.iter().enumerate().map(|(i, v)| {
-            let x = w + (1.0 - frac) * step - (n - 1 - i) as f32 * step;
-            let y = h - 4.0 - (v.min(max * 1.5) / max) * (h - 10.0);
-            pos2(r.left() + x, r.top() + y)
-        }).collect();
-        let mut curve = vec![pts[0]];
-        for i in 1..n {
-            let (p0, p1) = (pts[i - 1], pts[i]);
-            let mx = (p0.x + p1.x) / 2.0;
-            let (c1, c2) = (pos2(mx, p0.y), pos2(mx, p1.y));
-            for s in 1..=6 {
-                let t = s as f32 / 6.0;
-                let u = 1.0 - t;
-                let q = p0.to_vec2() * (u * u * u) + c1.to_vec2() * (3.0 * u * u * t) + c2.to_vec2() * (3.0 * u * t * t) + p1.to_vec2() * (t * t * t);
-                curve.push(q.to_pos2());
+        if n < 2 {
+            continue;
+        }
+        let raw: Vec<f32> = d.iter().copied().collect();
+        // ease the newest samples in from the previous value: a function of each sample's age alone, so
+        // it carries over seamlessly when the next sample arrives
+        let mut v = raw.clone();
+        for i in (1..n).rev() {
+            let age = (n - 1 - i) as f32 - lag + 1.0;
+            let m = smooth01((age + 1.0) / 1.5);
+            if m >= 1.0 {
+                break;
+            }
+            v[i] = raw[i - 1] + (raw[i] - raw[i - 1]) * m;
+        }
+        for _ in 0..smooth {
+            let c = v.clone();
+            for i in 0..n {
+                v[i] = (c[i.saturating_sub(1)] + 2.0 * c[i] + c[(i + 1).min(n - 1)]) * 0.25;
             }
         }
-        // fill: gradient from `fillc` at the top of the canvas to transparent at the bottom
+        // only the points on screen (plus one either side)
+        let first = (0..n).find(|&i| x_of((n - 1 - i) as f32) >= r.left() - step).unwrap_or(0).saturating_sub(1);
+        let pts: Vec<Pos2> = (first..n).map(|i| pos2(x_of((n - 1 - i) as f32), y_of(v[i]))).collect();
+        let np = pts.len();
+        if np < 2 {
+            continue;
+        }
+        // monotone cubic (Fritsch–Butland tangents): smooth, and never overshoots past the samples
+        let sec: Vec<f32> = (0..np - 1).map(|i| (pts[i + 1].y - pts[i].y) / step).collect();
+        let tan: Vec<f32> = (0..np)
+            .map(|i| {
+                if i == 0 {
+                    sec[0]
+                } else if i == np - 1 {
+                    sec[np - 2]
+                } else {
+                    let (a, b) = (sec[i - 1], sec[i]);
+                    if a * b <= 0.0 { 0.0 } else { 2.0 * a * b / (a + b) }
+                }
+            })
+            .collect();
+        let subs = ((step / 1.5).ceil() as usize).max(3);
+        let mut curve = Vec::with_capacity((np - 1) * subs + 1);
+        curve.push(pts[0]);
+        for i in 0..np - 1 {
+            let (p0, p1, m0, m1) = (pts[i], pts[i + 1], tan[i] * step, tan[i + 1] * step);
+            for s in 1..=subs {
+                let t = s as f32 / subs as f32;
+                let (t2, t3) = (t * t, t * t * t);
+                let y = (2.0 * t3 - 3.0 * t2 + 1.0) * p0.y + (t3 - 2.0 * t2 + t) * m0 + (-2.0 * t3 + 3.0 * t2) * p1.y + (t3 - t2) * m1;
+                curve.push(pos2(p0.x + (p1.x - p0.x) * t, y));
+            }
+        }
+        let alpha: Vec<f32> = curve.iter().map(|q| edge_fade(q.x)).collect();
+
+        // fill: the series colour under the line fading out towards the baseline
         let mut mesh = egui::Mesh::default();
         for (i, q) in curve.iter().enumerate() {
-            let k = 1.0 - ((q.y - r.top()) / h).clamp(0.0, 1.0);
-            mesh.colored_vertex(*q, fade(*fillc, k));
+            let k = 0.45 + 0.55 * (1.0 - ((q.y - r.top()) / h).clamp(0.0, 1.0));
+            mesh.colored_vertex(*q, fade(*fillc, k * alpha[i]));
             mesh.colored_vertex(pos2(q.x, r.bottom()), Color32::TRANSPARENT);
             if i > 0 {
                 let b = (i as u32) * 2;
@@ -435,8 +552,65 @@ pub fn chart(p: &Painter, r: Rect, series: &[(&std::collections::VecDeque<f32>, 
                 mesh.add_triangle(b, b + 1, b - 1);
             }
         }
+        // scan hatching: thin vertical light strokes riding the data, brightest just under the line
+        let lines = 3usize;
+        for (ci, q) in curve.iter().enumerate().step_by((subs / lines).max(1)) {
+            if q.x < r.left() || q.x > r.right() || r.bottom() - q.y < 3.0 {
+                continue;
+            }
+            let c = fade(*color, 0.11 * alpha[ci]);
+            let b = mesh.vertices.len() as u32;
+            let y1 = q.y + 1.5;
+            let y2 = y1 + (r.bottom() - y1) * 0.7;
+            mesh.colored_vertex(pos2(q.x - 0.5, y1), c);
+            mesh.colored_vertex(pos2(q.x + 0.5, y1), c);
+            mesh.colored_vertex(pos2(q.x - 0.5, y2), Color32::TRANSPARENT);
+            mesh.colored_vertex(pos2(q.x + 0.5, y2), Color32::TRANSPARENT);
+            mesh.add_triangle(b, b + 1, b + 2);
+            mesh.add_triangle(b + 1, b + 3, b + 2);
+        }
         cp.add(Shape::mesh(mesh));
-        glow_line(&cp, &curve, 1.8, *color, 8.0);
+
+        // glow, then a crisp core with a near-white centre (neon tube)
+        let g = |a: f32| fade(*color, a);
+        ribbon(&cp, &curve, &alpha, &[(-11.0, g(0.0)), (-6.0, g(0.05)), (-3.2, g(0.13)), (-1.6, g(0.28)), (0.0, g(0.38)), (1.6, g(0.28)), (3.2, g(0.13)), (6.0, g(0.05)), (11.0, g(0.0))]);
+        let hot = mix_white(*color, 0.45);
+        ribbon(&cp, &curve, &alpha, &[(-1.7, Color32::TRANSPARENT), (-0.95, *color), (0.0, hot), (0.95, *color), (1.7, Color32::TRANSPARENT)]);
+
+        // head: where the line meets the right edge (a little inset so the marker is whole)
+        let hx = r.right() - 5.0;
+        if let Some(j) = curve.windows(2).position(|s| s[0].x <= hx && s[1].x >= hx) {
+            let (a, b) = (curve[j], curve[j + 1]);
+            let t = if b.x > a.x { (hx - a.x) / (b.x - a.x) } else { 0.0 };
+            heads.push((pos2(hx, a.y + (b.y - a.y) * t), *color, si));
+        }
+        // the highest point on screen, for the peak marker (only on a line that actually moves)
+        let on: Vec<&Pos2> = curve.iter().filter(|q| q.x > r.left() + 24.0 && q.x < r.right() - 24.0).collect();
+        let lo = on.iter().map(|q| q.y).fold(f32::MIN, f32::max);
+        if let Some(q) = on.iter().min_by(|a, b| a.y.total_cmp(&b.y)) {
+            if r.bottom() - q.y > 14.0 && lo - q.y > h * 0.2 && peak.is_none_or(|(pk, _)| q.y < pk.y) {
+                peak = Some((**q, *color));
+            }
+        }
+    }
+
+    // peak marker: a small chevron above the highest point and a dashed drop line
+    if let Some((q, c)) = peak {
+        let mut y = q.y + 4.0;
+        while y < r.bottom() - 2.0 {
+            cp.line_segment([pos2(q.x, y), pos2(q.x, (y + 2.0).min(r.bottom()))], Stroke::new(1.0, fade(c, 0.28)));
+            y += 5.0;
+        }
+        let cy = (q.y - 6.0).max(r.top() + 4.0);
+        p.add(Shape::line(vec![pos2(q.x - 3.5, cy - 3.0), pos2(q.x, cy), pos2(q.x + 3.5, cy - 3.0)], Stroke::new(1.3, fade(c, 0.85))));
+    }
+    // heads: soft halo, an expanding ring and a bright dot
+    for (q, c, si) in heads {
+        let ph = (sc.t / 1.8 + si as f32 * 0.31).fract();
+        radial(p, q, 10.0, fade(c, 0.35));
+        p.circle_stroke(q, 2.5 + ph * 9.0, Stroke::new(1.2, fade(c, 0.55 * (1.0 - ph) * (1.0 - ph))));
+        p.circle_filled(q, 2.8, c);
+        p.circle_filled(q, 1.3, mix_white(c, 0.3));
     }
     if let Some(l) = label {
         text(&cp, pos2(r.left() + 6.0, r.top() + 12.0), Align2::LEFT_BOTTOM, &l, font(10.0), rgba(125, 146, 175, 0.8), 0.0);
@@ -473,9 +647,9 @@ fn network(app: &mut App, ui: &mut Ui) {
     if (app.net_max - target).abs() / target > 0.002 {
         app.pet.continuous = true;
     }
-    let frac = ((app.now - app.last_push) as f32).clamp(0.0, 1.0);
+    let sc = app.chart_scroll();
     let label = format!("peak scale {}", fmt_rate(Some(app.net_max as f64)));
-    chart(&p, canvas, &[(&app.hist.down, CYAN, rgba(62, 243, 255, 0.2)), (&app.hist.up, PINK, rgba(255, 79, 216, 0.12))], app.net_max, frac, Some(label));
+    chart(&p, canvas, &[(&app.hist.up, PINK, rgba(255, 79, 216, 0.12)), (&app.hist.down, CYAN, rgba(62, 243, 255, 0.18))], app.net_max, sc, 1, Some(label));
 
     // speed test + connection
     let hist = app.settings["speedHistory"].as_array().cloned().unwrap_or_default();

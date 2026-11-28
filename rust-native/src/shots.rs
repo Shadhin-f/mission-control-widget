@@ -1,6 +1,7 @@
 // Dev only (MC_SHOTS=<folder>): walks through the collapsed notch, hover, every tab and the chat, and
 // saves a PNG of each, for comparing against the other editions. MC_SHOTS_ONLY limits it to a list
-// such as "overview,chat".
+// such as "overview,chat"; MC_SHOTS_WAIT sets the seconds before the first shot (default 6), e.g. 100 to
+// let the history charts fill; MC_SHOTS_SCROLL=<px> holds pages scrolled down (see pages::page).
 use crate::app::{App, Mode, TABS};
 use eframe::egui::{self, ViewportCommand};
 use std::path::PathBuf;
@@ -26,7 +27,8 @@ impl Shots {
             let keep: Vec<&str> = only.split(',').collect();
             steps.retain(|s| keep.contains(&s.as_str()));
         }
-        Some(Self { dir, steps, i: 0, at: 6.0, pending: Arc::new(AtomicBool::new(false)) })
+        let at = std::env::var("MC_SHOTS_WAIT").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0);
+        Some(Self { dir, steps, i: 0, at, pending: Arc::new(AtomicBool::new(false)) })
     }
 
     pub fn step(&mut self, ctx: &egui::Context, app: &mut App) {

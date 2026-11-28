@@ -32,18 +32,20 @@ pub enum Tab {
     Overview,
     Controls,
     Network,
+    Power,
     Apps,
     Cleaner,
     Settings,
     Credits,
 }
-pub const TABS: [Tab; 7] = [Tab::Overview, Tab::Controls, Tab::Network, Tab::Apps, Tab::Cleaner, Tab::Settings, Tab::Credits];
+pub const TABS: [Tab; 8] = [Tab::Overview, Tab::Controls, Tab::Network, Tab::Power, Tab::Apps, Tab::Cleaner, Tab::Settings, Tab::Credits];
 impl Tab {
     pub fn label(self) -> &'static str {
         match self {
             Tab::Overview => "OVERVIEW",
             Tab::Controls => "CONTROLS",
             Tab::Network => "NETWORK",
+            Tab::Power => "POWER",
             Tab::Apps => "APPS",
             Tab::Cleaner => "CLEANER",
             Tab::Settings => "SETTINGS",
@@ -78,6 +80,52 @@ pub struct Pointer {
 pub struct Bubble {
     pub text: String,
     pub until: f64,
+}
+
+/// Scroll state of a history chart: the newest sample starts one step past the right edge and glides in
+/// at about one step per sample interval (a little faster when behind), so the chart moves steadily however
+/// unevenly samples arrive.
+pub struct ScrollState {
+    /// steps the newest sample still has to travel
+    pub lag: f32,
+    /// measured sample interval, seconds
+    pub dt: f32,
+    /// the frame that last advanced it
+    pub tick: f64,
+    /// samples so far
+    pub count: u64,
+    last_push: f64,
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        Self { lag: 0.0, dt: 1.0, tick: 0.0, count: 0, last_push: 0.0 }
+    }
+}
+
+impl ScrollState {
+    pub fn push(&mut self, now: f64) {
+        let gap = (now - self.last_push) as f32;
+        if self.last_push > 0.0 && (0.25..4.0).contains(&gap) {
+            self.dt += (gap - self.dt) * 0.25;
+        }
+        self.lag += 1.0;
+        self.count += 1;
+        self.last_push = now;
+    }
+
+    pub fn advance(&mut self, now: f64) -> crate::pages::Scroll {
+        let dt = (now - self.tick) as f32;
+        self.tick = now;
+        if (0.0..0.25).contains(&dt) {
+            let speed = (0.6 + 0.4 * self.lag) / self.dt.max(0.2);
+            self.lag = (self.lag - dt * speed).max(0.0);
+        } else {
+            // first frame back on the page: don't replay the backlog
+            self.lag = self.lag.min(1.0);
+        }
+        crate::pages::Scroll { lag: self.lag, count: self.count, t: (now % 3600.0) as f32 }
+    }
 }
 
 #[derive(Default)]
@@ -127,6 +175,8 @@ pub struct CleanerUi {
 pub struct App {
     pub ctx: egui::Context,
     pub be: Arc<Backend>,
+    pub power: Arc<crate::power::PowerMon>,
+    pub pw: crate::power_page::PowerUi,
     pub q: Arc<Mutex<VecDeque<(String, Value)>>>,
     pub a: Anims,
     pub ptr: Arc<Mutex<Pointer>>,
@@ -155,6 +205,7 @@ pub struct App {
     pub settings: Value,
     pub hist: Hist,
     pub last_push: f64,
+    pub hist_scroll: ScrollState,
     pub lat_hist: VecDeque<Option<f64>>,
     pub was_offline: bool,
     pub hot_since: f64,
@@ -198,7 +249,7 @@ pub struct App {
     pub shots: Option<crate::shots::Shots>,
     pub shell: Rect,
     /// pages waiting on the left (CSS .page.left), by tab index
-    pub page_left: [bool; 7],
+    pub page_left: [bool; TABS.len()],
     /// the page being drawn is the active one (inactive pages don't take clicks)
     pub live: bool,
     /// network chart scale (eased towards 1.25x the peak)
@@ -236,6 +287,8 @@ impl App {
         let tray = crate::tray::Tray::new(&be);
         let mut app = Self {
             ctx: ctx.clone(),
+            power: crate::power::PowerMon::start(be.clone()),
+            pw: Default::default(),
             be,
             q,
             a: Anims::new(),
@@ -263,6 +316,7 @@ impl App {
             settings: Value::Null,
             hist: Hist::default(),
             last_push: 0.0,
+            hist_scroll: ScrollState::default(),
             lat_hist: VecDeque::new(),
             was_offline: false,
             hot_since: 0.0,
@@ -301,7 +355,7 @@ impl App {
             greeted: false,
             shots: crate::shots::Shots::from_env(),
             shell: Rect::NOTHING,
-            page_left: [false; 7],
+            page_left: [false; TABS.len()],
             live: true,
             net_max: 1.0,
         };
@@ -724,7 +778,8 @@ impl App {
         let cpu = s["cpu"].as_f64().unwrap_or(0.0);
         let push = |d: &mut VecDeque<f32>, v: f64| {
             d.push_back(v as f32);
-            if d.len() > HIST {
+            // a few spare samples past the left edge, so dropping the oldest is never on screen
+            if d.len() > HIST + 4 {
                 d.pop_front();
             }
         };
@@ -734,6 +789,7 @@ impl App {
         push(&mut self.hist.gpu, s["gpu"]["util"].as_f64().unwrap_or(0.0));
         push(&mut self.hist.down, s["net"]["down"].as_f64().unwrap_or(0.0));
         push(&mut self.hist.up, s["net"]["up"].as_f64().unwrap_or(0.0));
+        self.hist_scroll.push(self.now);
         self.last_push = self.now;
         // pet reactions
         if cpu > 90.0 {
@@ -755,6 +811,11 @@ impl App {
             self.say(msg, Some("disk"), 5000.0, 30.0 * 60000.0);
         }
         self.stats = s;
+    }
+
+    /// Advance the history charts' scroll for this frame. Call once per frame from the page that draws them.
+    pub fn chart_scroll(&mut self) -> crate::pages::Scroll {
+        self.hist_scroll.advance(self.now)
     }
 
     fn on_latency(&mut self, l: Value) {
@@ -989,6 +1050,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.power.flush();
         self.be.shutdown();
     }
 }
@@ -1001,7 +1063,7 @@ impl App {
     /// Something on screen animates continuously (charts scrolling, visualiser, sweep, spinners)
     fn continuous_page(&self) -> bool {
         let panel = self.mode == Mode::Panel;
-        (panel && matches!(self.tab, Tab::Overview | Tab::Network))
+        (panel && matches!(self.tab, Tab::Overview | Tab::Network | Tab::Power))
             || (panel && self.tab == Tab::Controls && self.ctl.playing())
             || (panel && self.tab == Tab::Cleaner && (self.cleaner.busy || self.cleaner.cleaning))
             || (self.mode != Mode::Collapsed && crate::notch::sweep_active(self))
