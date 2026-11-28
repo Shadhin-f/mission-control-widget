@@ -5,8 +5,8 @@ developer tools to use them.
 
 | File | For | Size |
 | --- | --- | --- |
-| `Mission Control_1.0.0_x64-setup.exe` | Windows 10 / 11, 64-bit | 1.9 MB |
-| `Mission Control_1.0.0_aarch64.dmg` | macOS 12+ on Apple Silicon (M1 and later) | 2.9 MB |
+| `Mission Control_1.1.0_x64-setup.exe` | Windows 10 / 11, 64-bit: the Tauri Rust edition, with the Power and Credits tabs and the Extreme mode dock | 2.1 MB |
+| `Mission Control_1.1.0_aarch64.dmg` | macOS 12+ on Apple Silicon (M1 and later): the Tauri Rust edition | 2.9 MB |
 | `Mission Control Native_1.0.0_aarch64.dmg` | macOS 12+ on Apple Silicon: the **pure Rust edition**, built and smoke-tested locally on an Apple M4 Mac | 3.5 MB |
 | `Mission Control Native_1.0.0_x64-setup.exe` | Windows 10 / 11, 64-bit: the [pure Rust edition](../rust-native/README.md) (no web view) | 4.1 MB |
 
@@ -14,8 +14,9 @@ There is no Intel Mac build yet. On an Intel Mac, build from source (see the mai
 
 ## Windows
 
-1. Download `Mission Control_1.0.0_x64-setup.exe` and run it. It installs for your user account
-   only, so no admin rights are needed.
+1. Download `Mission Control_1.1.0_x64-setup.exe` and run it. It installs for your user account
+   only, so no admin rights are needed. Over an earlier version it updates in place, keeping your
+   settings.
 2. Windows SmartScreen may say it "protected your PC", because the installer isn't code-signed.
    Click **More info**, then **Run anyway**.
 3. Start Mission Control from the installer's last page or from the Start menu. The widget appears
@@ -26,8 +27,8 @@ doesn't, the installer downloads it during setup.
 
 ## macOS (Apple Silicon)
 
-1. Download `Mission Control_1.0.0_aarch64.dmg`, open it and drag **Mission Control** into
-   **Applications**.
+1. Download `Mission Control_1.1.0_aarch64.dmg`, open it and drag **Mission Control** into
+   **Applications** (replacing an older copy if you have one).
 2. The app isn't notarized by Apple. The first time, Control-click it in Applications and choose
    **Open**, or open it and then click **Open Anyway** in
    **System Settings → Privacy & Security**.
@@ -40,15 +41,15 @@ For the native egui app with no webview, download **`Mission Control Native_1.0.
 
 This installer was compiled from `rust-native` and tested on an Apple M4 running macOS 27.0.1. Checks covered bundle/helper signatures, six read-only native queries, all ten UI screens and normal exit with isolated settings and startup disabled. Older macOS versions, Intel hardware, destructive controls and AI message sending were not run-tested. Reproduce the build and smoke checks with the [native edition instructions](../rust-native/README.md#build-from-source).
 
-The older Tauri macOS installer above was produced by CI and has not been hand-tested here.
+The Tauri macOS installer above was produced by CI (the `Rust edition` workflow on GitHub's macOS runner) and has not been hand-tested on a Mac. The Tauri Windows installer was built and tested on Windows 11.
 
 ## Checksums (SHA-256)
 
 ```
 2993652b9a9f8f1ad3aa6dc84502766017953709b2ba56e4980b4fe8a1d7349e  Mission Control Native_1.0.0_aarch64.dmg
-9f3fbb5b2c5ab6e6deaeeb2f90732dbbdaff3f9503540b0d96b417e7bb5205f8  Mission Control_1.0.0_x64-setup.exe
+1c6409394a66bd5cc39ac74b2a25f60949649e05b78811376d21c4c4ed562c4f  Mission Control_1.1.0_x64-setup.exe
 97a440e383426a8e10b7ff90aed5dbae2597ff67ad011501024c0a2eeeb49a8b  Mission Control Native_1.0.0_x64-setup.exe
-b5681db6bf8055fe4f9fedb61f069996432a2d5b197ea7348e9d26b9588c8ae8  Mission Control_1.0.0_aarch64.dmg
+5e58b20320f4a3fa7f22baa1b055b75516296b98a45026aa22abb8176744a6c7  Mission Control_1.1.0_aarch64.dmg
 ```
 
 To check a download on Windows, run `Get-FileHash <file>` in PowerShell. On a Mac, run
