@@ -5,7 +5,7 @@ The same widget with **no web view at all**: the interface is drawn natively on 
 behaves like the other editions: the same notch, pet and moods, tabs, charts, controls, chat, cleaner
 and Extreme mode, with the same sizes, colours, easing curves and timings (ported from
 `renderer/styles.css` and `renderer/app.js`). It adds a **Credits** tab listing the project's GitHub
-contributors, and a **Power** tab (Windows): live power draw and what it costs per day, week, month
+contributors, and a **Power** tab on Windows and macOS: live power draw and what it costs per day, week, month
 and year.
 
 ## Health checks and the pet's moods
@@ -34,7 +34,7 @@ stayed under 8 MB/s for 3 s.
 
 ## Power and electricity cost
 
-The Power tab works on any Windows PC. It detects the CPU and every graphics adapter, and reads each
+The Power tab works on Windows and macOS. It detects the CPU and every graphics adapter, and reads each
 part's power from the best source available:
 
 | Part | Source |
@@ -52,6 +52,14 @@ settings, which gives actual totals; projections use the average power while the
 it is on per day (learned from past days, 8 h until a full day is tracked, or your setting). It counts
 while the app runs, including while the widget idles during fullscreen games. Accuracy is roughly
 10–20% against a wall meter on a desktop with a measured CPU and GPU, better after calibrating.
+
+### macOS power sources
+
+The Mac backend reads battery current/voltage, charging state, Metal GPU identities/load, and the user's currency without administrator privileges. On supported MacBooks, optional IORegistry adapter telemetry provides **DC input at the Mac connector**. Its voltage/current product must agree with the reported power before it is used. This telemetry is undocumented and may be absent on other models or macOS versions.
+
+DC input and battery drain are measured when available; CPU/GPU/component allocations remain estimates. Charger losses and wall electricity costs are estimates unless calibrated with a wall meter. The UI labels this boundary. Charging power is included once in the DC total; on battery, the current wall-power reading is zero and energy is counted when recharging, matching the Windows edition. When no total sensor is available (including many desktop/Intel Macs), the page uses labelled load-based estimates. A manual component override switches back to the component model; wall-meter calibration of a measured DC total adjusts charger efficiency.
+
+The new neon charts, cost projections, adjustable tariff/currency/hours, daily log and history use the same shared implementation on both platforms. Historical amounts are estimates rather than utility-billing readings. macOS's Dock remains the native Dock; Windows taskbar/Start-menu theming is Windows-specific.
 
 | | Electron edition | Pure Rust edition |
 | --- | --- | --- |
@@ -119,7 +127,7 @@ Mount the generated DMG, then run:
 python3 scripts/test-macos.py "/Volumes/Mission Control Native/Mission Control Native.app" --report-dir /tmp/mission-control-native-test
 ```
 
-This verifies the bundle and six read-only native helper queries, captures all UI pages, and checks a normal timed exit. It uses an isolated temporary settings directory and disables startup registration and system theming. It does not exercise destructive actions, send AI prompts, run a speed test or install the app. Apple Silicon was built and tested on macOS 27.0.1; older macOS releases and Intel hardware have not been run-tested.
+This verifies the bundle and seven read-only native helper queries (including power), captures all UI pages, checks a normal timed exit and verifies that power history survives a restart. It uses an isolated temporary settings directory and disables startup registration and system theming. It does not exercise destructive actions, send AI prompts, run a speed test or install the app. Apple Silicon was built and tested on macOS 27.0.1; older macOS releases and Intel hardware have not been run-tested.
 
 ## How it is built
 

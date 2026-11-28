@@ -51,6 +51,11 @@ impl Emitter for AppHandle {
 pub mod async_runtime {
     pub use tokio::task::JoinHandle;
 
+    /// Match Tauri's runtime API for shared backends called from a dedicated OS thread.
+    pub fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        crate::runtime().block_on(future)
+    }
+
     pub fn spawn<F>(f: F) -> JoinHandle<F::Output>
     where
         F: std::future::Future + Send + 'static,

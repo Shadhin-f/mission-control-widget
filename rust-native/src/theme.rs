@@ -207,6 +207,12 @@ pub fn install_fonts(ctx: &egui::Context) {
         m_names.push("mono".to_string());
     }
     let mut s_names = Vec::new();
+    // SF/Apple Symbols do not cover the Taka currency glyph used by Bengali locales.
+    #[cfg(target_os = "macos")]
+    if let Some(bytes) = read_first(&["/System/Library/Fonts/Supplemental/Bangla MN.ttc", "/System/Library/Fonts/KohinoorBangla.ttc"]) {
+        extra.push(("bangla".into(), Arc::new(FontData::from_static(bytes))));
+        s_names.push("bangla".to_string());
+    }
     if let Some(bytes) = read_first(symbols) {
         extra.push(("symbols".into(), Arc::new(FontData::from_static(bytes))));
         s_names.push("symbols".to_string());
