@@ -113,6 +113,22 @@ fn pick_model() -> Option<String> {
     listed.into_iter().next()
 }
 
+/// The smallest model the account lists: one described as fast / for easier tasks, or named mini,
+/// preferring current over legacy ones. None lets Codex use its own setting.
+#[allow(dead_code)] // used by the native edition's health checks
+pub fn small_model() -> Option<String> {
+    let t = std::fs::read_to_string(home().join(".codex").join("models_cache.json")).ok()?;
+    let v: Value = serde_json::from_str(&t).ok()?;
+    let listed: Vec<&Value> = v["models"].as_array()?.iter().filter(|m| m["visibility"] == "list").collect();
+    let small = |m: &&&Value| {
+        let d = m["description"].as_str().unwrap_or("").to_lowercase();
+        let s = m["slug"].as_str().unwrap_or("").to_lowercase();
+        s.contains("mini") || d.contains("easier") || d.contains("simpler") || d.contains("lightweight") || (d.contains("fast") && !d.contains("agentic coding"))
+    };
+    let legacy = |m: &&&Value| m["description"].as_str().unwrap_or("").to_lowercase().contains("legacy");
+    listed.iter().filter(small).find(|m| !legacy(m)).or_else(|| listed.iter().find(small)).and_then(|m| m["slug"].as_str().map(String::from))
+}
+
 fn window_label(mins: f64) -> String {
     if mins <= 0.0 {
         return "?".into();
@@ -216,11 +232,13 @@ pub struct Codex {
     stopped: AtomicBool,
     on_event: EventFn,
     pub on_turn_finished: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// (model, reasoning effort) for this chat; None model keeps the usual pick. Cleared by `reset`
+    pub model_override: Mutex<Option<(Option<String>, String)>>,
 }
 
 impl Codex {
     pub fn new(on_event: EventFn) -> Arc<Self> {
-        Arc::new(Self { exe: Mutex::new(None), editor_exe: Mutex::new(None), thread: Mutex::new(None), child: Mutex::new(None), stopped: AtomicBool::new(false), on_event, on_turn_finished: Mutex::new(None) })
+        Arc::new(Self { exe: Mutex::new(None), editor_exe: Mutex::new(None), thread: Mutex::new(None), child: Mutex::new(None), stopped: AtomicBool::new(false), on_event, on_turn_finished: Mutex::new(None), model_override: Mutex::new(None) })
     }
 
     /// Finds Codex. The copy bundled with an editor extension only counts when allow_editor is on.
@@ -247,7 +265,8 @@ impl Codex {
         if self.child.lock().unwrap().is_some() {
             return;
         }
-        let model = pick_model();
+        let over = self.model_override.lock().unwrap().clone();
+        let model = over.as_ref().and_then(|o| o.0.clone()).or_else(pick_model);
         let thread = self.thread.lock().unwrap().clone();
         let mut c = cli_cmd(&exe);
         match &thread {
@@ -257,6 +276,9 @@ impl Codex {
         c.args(["--json", "--skip-git-repo-check", "-c", &format!("sandbox_mode={}", if mode == "plan" { "read-only" } else { "workspace-write" })]);
         if let Some(m) = &model {
             c.args(["-m", m]);
+        }
+        if let Some((_, e)) = &over {
+            c.args(["-c", &format!("model_reasoning_effort={e}")]);
         }
         c.arg("-").current_dir(home()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(unix)]
@@ -372,6 +394,40 @@ impl Codex {
     pub fn reset(&self) {
         self.stop();
         *self.thread.lock().unwrap() = None;
+        *self.model_override.lock().unwrap() = None;
+    }
+
+    /// One quick answer from the smallest listed model at low reasoning effort, in a read-only sandbox,
+    /// separate from the chat. None on any failure or timeout.
+    #[allow(dead_code)] // used by the native edition's health checks
+    pub async fn quick(&self, prompt: &str, timeout_s: u64) -> Option<String> {
+        let exe = self.exe.lock().unwrap().clone()?;
+        let mut c = cli_cmd(&exe);
+        c.args(["exec", "--json", "--skip-git-repo-check", "-s", "read-only", "-c", "model_reasoning_effort=low"]);
+        if let Some(m) = small_model() {
+            c.args(["-m", &m]);
+        }
+        c.arg("-").current_dir(std::env::temp_dir()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+        let mut child = c.spawn().ok()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(prompt.as_bytes()).await;
+        }
+        let mut lines = tokio::io::BufReader::new(child.stdout.take()?).lines();
+        let mut last = None;
+        let read = async {
+            while let Ok(Some(line)) = lines.next_line().await {
+                let Ok(m) = serde_json::from_str::<Value>(line.trim()) else { continue };
+                if m["type"] == "item.completed" && m["item"]["type"] == "agent_message" {
+                    last = m["item"]["text"].as_str().map(String::from);
+                }
+                if m["type"] == "turn.completed" || m["type"] == "turn.failed" {
+                    break;
+                }
+            }
+        };
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(timeout_s), read).await;
+        let _ = child.kill().await;
+        last
     }
 
     /// Plan limits: app-server first (no model call, no usage), else the newest session log.

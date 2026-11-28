@@ -59,6 +59,10 @@ pub enum Mood {
     Happy,
     Stressed,
     Sleep,
+    /// everything has been normal for a long while: happy eyes, and now and then a little jolly bit
+    Comfy,
+    /// the network is flying (10 MB/s or more): the pet rides a rocket
+    Rocket,
 }
 
 pub struct Pet {
@@ -83,6 +87,14 @@ pub struct Pet {
     load_step: i32,
     cand: i32,
     cand_n: u8,
+    /// since when everything has been normal (app clock; 0 = not normal right now)
+    pub normal_since: f64,
+    pub rocket: bool,
+    rocket_lo: f64,
+    next_jolly: f64,
+    pub jolly_start: f64,
+    pub jolly_until: f64,
+    pub jolly_kind: u8,
 }
 
 impl Default for Pet {
@@ -109,6 +121,13 @@ impl Default for Pet {
             load_step: -1,
             cand: -1,
             cand_n: 0,
+            normal_since: 0.0,
+            rocket: false,
+            rocket_lo: 0.0,
+            next_jolly: 0.0,
+            jolly_start: 0.0,
+            jolly_until: 0.0,
+            jolly_kind: 0,
         }
     }
 }
@@ -166,6 +185,8 @@ impl Pet {
             Mood::Stressed => rgb(0xff, 0x6b, 0x5a),
             Mood::Think => rgb(0xff, 0xa0, 0x71),
             Mood::Excited => rgb(0xc4, 0x8b, 0xff),
+            Mood::Comfy => rgb(0x5d, 0xff, 0xc4),
+            Mood::Rocket => rgb(0xff, 0xb5, 0x47),
             Mood::Calm if self.hue_step >= 0 => hsl(186.0 + self.hue_step as f32 * 22.0, 100.0, 62.0 + self.hue_step as f32 * 2.0),
             _ => self.root_pc,
         }
@@ -177,8 +198,44 @@ fn refresh_pet(app: &mut App) {
     let s = &app.stats;
     let ram = if s.is_null() { 0.0 } else { s["mem"]["used"].as_f64().unwrap_or(0.0) / s["mem"]["total"].as_f64().unwrap_or(1.0).max(1.0) * 100.0 };
     let cpu = s["cpu"].as_f64().unwrap_or(0.0);
+    let now = app.now;
+    // dev: MC_PET_TEST=rocket|comfy holds that mood, to see the animations
+    let test = std::env::var("MC_PET_TEST").unwrap_or_default();
+    // rocket: on at 10 MB/s (either direction), off once it stays under 8 MB/s for 3 s
+    let net = s["net"]["down"].as_f64().unwrap_or(0.0).max(s["net"]["up"].as_f64().unwrap_or(0.0));
+    {
+        let pet = &mut app.pet;
+        const MB: f64 = 1024.0 * 1024.0;
+        if test == "rocket" {
+            pet.rocket = true;
+        } else if s.is_null() {
+            pet.rocket = false;
+        } else if net >= 10.0 * MB {
+            pet.rocket = true;
+            pet.rocket_lo = 0.0;
+        } else if pet.rocket && net < 8.0 * MB {
+            if pet.rocket_lo == 0.0 {
+                pet.rocket_lo = now;
+            } else if now - pet.rocket_lo > 3.0 {
+                pet.rocket = false;
+            }
+        } else {
+            pet.rocket_lo = 0.0;
+        }
+    }
+    // comfy: nothing wrong (load and memory easy, no open health warning, someone at the PC) for 10 min
+    let alert_bad = app.health.alert.and_then(|i| app.health.get(i)).is_some_and(|e| e.status == "warn" || e.status == "critical");
+    let normal = !s.is_null() && cpu < 60.0 && ram < 85.0 && !alert_bad && !app.speed_running && app.user_idle <= 180.0;
+    if !normal {
+        app.pet.normal_since = 0.0;
+    } else if app.pet.normal_since == 0.0 {
+        app.pet.normal_since = now;
+    }
+    let comfy = test == "comfy" || test.starts_with("jolly") || (app.pet.normal_since > 0.0 && now - app.pet.normal_since >= 600.0);
     let mood = if app.ai_busy {
         Mood::Think
+    } else if app.pet.rocket {
+        Mood::Rocket
     } else if app.speed_running {
         Mood::Excited
     } else if app.shell_hover || app.mode != Mode::Collapsed {
@@ -187,6 +244,8 @@ fn refresh_pet(app: &mut App) {
         Mood::Stressed
     } else if app.user_idle > 180.0 {
         Mood::Sleep
+    } else if comfy {
+        Mood::Comfy
     } else {
         Mood::Calm
     };
@@ -194,6 +253,27 @@ fn refresh_pet(app: &mut App) {
     if mood != pet.mood {
         pet.mood = mood;
         pet.mood_since = app.now;
+        if mood == Mood::Comfy {
+            pet.next_jolly = now + 3.0;
+        }
+    }
+    // jolly bits: a hop, a little dance, a tune or a sparkly wink every 18-38 s while comfy
+    if let Some(k) = test.strip_prefix("jolly").and_then(|d| d.parse::<u8>().ok()) {
+        // dev: MC_PET_TEST=jolly0..3 repeats one bit
+        if now >= pet.jolly_until {
+            pet.jolly_kind = k % 4;
+            pet.jolly_start = now;
+            pet.jolly_until = now + 3.2;
+        }
+    } else if mood == Mood::Comfy {
+        if now >= pet.next_jolly {
+            pet.jolly_kind = (rand::random::<u32>() % 4) as u8;
+            pet.jolly_start = now;
+            pet.jolly_until = now + 3.2;
+            pet.next_jolly = now + 18.0 + rand::random::<f64>() * 20.0;
+        }
+    } else {
+        pet.jolly_until = 0.0;
     }
     // calm colour drifts cyan -> violet with CPU load, in 4 coarse steps
     // The load step only counts once it has held for three samples, so load hovering on a boundary
@@ -204,8 +284,8 @@ fn refresh_pet(app: &mut App) {
         pet.root_pc = pet.pc();
     }
     pet.net = !s.is_null() && s["net"]["down"].as_f64().unwrap_or(0.0) > 2.0 * 1024.0 * 1024.0;
-    let busy = (mood != Mood::Calm && mood != Mood::Sleep) || pet.net;
-    let alive = busy || pet.fidgeting;
+    let busy = !matches!(mood, Mood::Calm | Mood::Sleep | Mood::Comfy) || pet.net;
+    let alive = busy || pet.fidgeting || pet.jolly_until > now;
     if alive && !pet.alive {
         pet.alive_since = app.now;
     }
@@ -319,6 +399,7 @@ pub fn draw(app: &mut App, ui: &mut Ui, hits: &mut Vec<Rect>) {
     }
     draw_pet(app, ui, no_ai && !pet_only && app.mode == Mode::Collapsed, hover, hits);
     draw_bubble(app, ui);
+    crate::health::draw_alert(app, ui, hits);
     draw_toast(app, ui);
     if app.cleaner.confirm {
         hits.push(shell);
@@ -647,6 +728,9 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
     let mood = pet.mood;
     let alive = pet.alive;
     let at = now - pet.alive_since;
+    let jolly = mood == Mood::Comfy && pet.jolly_until > now;
+    let (jk, jt) = (pet.jolly_kind, (now - pet.jolly_start) as f32);
+    let collapsed = app.mode == Mode::Collapsed;
     let pc_t = pet.pc();
     let pc = app.a.color("pet_pc", pc_t, 0.8);
     let eye_c = app.a.color("eye_pc", pc_t, 0.6);
@@ -656,7 +740,7 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
     let s = scale;
 
     // halo
-    let halo_period = if mood == Mood::Sleep { 6.0 } else if pet.net { 1.2 } else { 3.4 };
+    let halo_period = if mood == Mood::Sleep { 6.0 } else if mood == Mood::Rocket { 0.6 } else if pet.net { 1.2 } else { 3.4 };
     let hk = if alive { pulse(at, halo_period) } else { 0.0 };
     let halo_base = if mood == Mood::Sleep { 0.10 } else { 0.22 };
     let halo_op = halo_base + (0.34 - halo_base) * hk;
@@ -690,14 +774,45 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
         let ph = ((at / 0.5) % 1.0) as f32;
         let k = if ph < 0.25 { -EASE_IN_OUT.at(ph / 0.25) } else if ph < 0.75 { -1.0 + 2.0 * EASE_IN_OUT.at((ph - 0.25) / 0.5) } else { 1.0 - EASE_IN_OUT.at((ph - 0.75) / 0.25) };
         off.x = 0.8 * k;
+    } else if mood == Mood::Rocket {
+        // engine rumble, lifted a little
+        off.x = 0.7 * (now * 53.0).sin() as f32;
+        off.y = -1.5 + 0.7 * (now * 41.0).sin() as f32;
+    } else if jolly {
+        use std::f32::consts::{PI, TAU};
+        match jk {
+            0 => {
+                // two hops
+                let ph = jt / 0.75;
+                if ph < 2.0 {
+                    off.y = -7.0 * (PI * ph.fract()).sin();
+                }
+            }
+            1 => {
+                // side-to-side dance
+                off.x = 3.0 * (jt * TAU * 1.5).sin();
+                off.y = -1.5 * (jt * TAU * 3.0).sin().abs();
+            }
+            _ => {
+                off.x = 2.0 * (jt * TAU * 0.8).sin();
+                off.y = -(jt * TAU * 1.6).sin().abs();
+            }
+        }
     } else if alive {
         let per = if mood == Mood::Sleep { 6.0 } else { 3.4 };
         off.y = 1.6 * pulse(at, per);
     }
     let o = |x: f32, y: f32| tf(base + off + vec2(x, y));
 
+    // the rocket (only under the collapsed notch, where there's room)
+    let rk = app.a.v("rocket_k", if mood == Mood::Rocket && collapsed { 1.0 } else { 0.0 }, 0.5, SPRING);
+    if rk > 0.01 {
+        draw_rocket(&p, &o, now, rk.clamp(0.0, 1.0));
+        app.pet.continuous = true;
+    }
+
     // fins
-    let happy = mood == Mood::Happy;
+    let happy = matches!(mood, Mood::Happy | Mood::Comfy);
     let fin_k = app.a.v("fin", if happy { 1.0 } else { 0.0 }, 0.4, SPRING);
     let wig = if happy && now - app.pet.mood_since < 1.0 {
         let ph = (((now - app.pet.mood_since) / 0.5) % 1.0) as f32;
@@ -705,7 +820,12 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
     } else {
         0.0
     };
-    let fin_ang = 18f32.to_radians() * fin_k * (1.0 - wig);
+    let mut fin_ang = 18f32.to_radians() * fin_k * (1.0 - wig);
+    if mood == Mood::Rocket {
+        fin_ang = (28.0 + 8.0 * (now * 30.0).sin() as f32).to_radians();
+    } else if jolly && jk == 1 {
+        fin_ang = (18.0 + 20.0 * (jt * std::f32::consts::TAU * 3.0).sin()).to_radians();
+    }
     draw_fin(&p, o(1.0, 15.0), o(9.0, 27.0), true, fin_ang, s);
     draw_fin(&p, o(37.0, 15.0), o(45.0, 27.0), false, -fin_ang, s);
 
@@ -748,7 +868,7 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
     let blink = app.pet.blink_until > now && mood != Mood::Sleep;
     let (ew_t, eh_t) = match mood {
         Mood::Happy => (7.0, 5.0),
-        Mood::Excited => (6.0, 10.0),
+        Mood::Excited | Mood::Rocket => (6.0, 10.0),
         Mood::Sleep => (7.0, 2.0),
         Mood::Stressed => (5.0, 6.0),
         _ => (5.0, 8.0),
@@ -764,7 +884,11 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
     for (i, sign) in [(-1.0f32), 1.0].into_iter().enumerate() {
         let cx = ec.x + sign * (7.0 / 2.0 + ew / 2.0) * s;
         let center = pos2(cx, ec.y);
-        if happy_k > 0.5 {
+        let wink = jolly && jk == 3 && (0.4..1.1).contains(&jt) && i == 1;
+        if wink {
+            let w2 = ew * s / 2.0;
+            glow_line(&vp, &[pos2(cx - w2, ec.y + 1.0), pos2(cx + w2, ec.y + 1.0)], 2.0 * s, eye_c, 3.0);
+        } else if happy_k > 0.5 {
             // ^ ^ : 2px border on top and sides, rounded 6 6 0 0
             let (w2, h2) = (ew * s / 2.0, eh * s);
             let mut pts = vec![pos2(cx - w2 + 1.0, ec.y + h2 / 2.0)];
@@ -794,6 +918,32 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
             p.add(egui::epaint::EllipseShape::filled(r.center(), r.size() / 2.0, fade(rgb(0xff, 0x7f, 0xb5), ck)));
         }
     }
+    // jolly extras: a little tune, or a burst of sparkles
+    if jolly && jk == 2 {
+        let cols = [PINK, CYAN, VIOLET];
+        for (i, col) in cols.into_iter().enumerate() {
+            let ph = ((jt - i as f32 * 0.7) / 2.0).clamp(0.0, 1.0);
+            if ph <= 0.0 || ph >= 1.0 {
+                continue;
+            }
+            let at_ = o(47.0 + 8.0 * ph + 2.5 * (ph * 9.0).sin(), 40.0 - 28.0 * ph);
+            note(&p, at_, fade(col, (std::f32::consts::PI * ph).sin()));
+        }
+    }
+    if jolly && jk == 3 {
+        let ph = (jt / 1.6).clamp(0.0, 1.0);
+        if ph < 1.0 {
+            for i in 0..6 {
+                let ang = i as f32 * std::f32::consts::TAU / 6.0 + 0.3;
+                let q = c + vec2(ang.cos(), ang.sin() * 0.8) * (22.0 + 12.0 * EASE_OUT.at(ph));
+                let sz = 1.5 + 3.0 * (1.0 - ph);
+                let col = fade(if i % 2 == 0 { rgb(0xff, 0xe0, 0x7a) } else { CYAN }, 1.0 - ph);
+                p.line_segment([q + vec2(-sz, 0.0), q + vec2(sz, 0.0)], Stroke::new(1.3, col));
+                p.line_segment([q + vec2(0.0, -sz), q + vec2(0.0, sz)], Stroke::new(1.3, col));
+                p.circle_filled(q, 1.0, col);
+            }
+        }
+    }
     // sweat drop (stressed)
     if mood == Mood::Stressed {
         let ph = (((now - app.pet.mood_since) / 2.2) % 1.0) as f32;
@@ -818,6 +968,76 @@ fn draw_pet(app: &mut App, ui: &mut Ui, shifted: bool, hover: bool, hits: &mut V
         }
     }
     app.pet.continuous |= alive || blink || app.pet.fidgeting;
+}
+
+/// The pet's rocket: speed lines streaking past, smoke, a flickering flame, fins and a body the pet sits
+/// on (drawn before the pet, so the pet covers its top). `rk` slides it in from below.
+fn draw_rocket(p: &Painter, o: &dyn Fn(f32, f32) -> Pos2, now: f64, rk: f32) {
+    let t = (now % 3600.0) as f32;
+    let dy = (1.0 - rk) * 26.0;
+    let q = |x: f32, y: f32| o(x, y + dy);
+    // speed lines and smoke stay under the notch, clear of the bar's chips
+    let below = p.clip_rect().intersect(Rect::from_min_max(pos2(0.0, 47.0), pos2(crate::app::WIN_W, 400.0)));
+    let pl = p.clone().with_clip_rect(below);
+    // speed lines streaking down past the pet: it's going up
+    let xs = [-30.0, -22.0, -14.0, 60.0, 68.0, 76.0, -38.0, 84.0, -6.0];
+    for (i, x) in xs.into_iter().enumerate() {
+        let fi = i as f32;
+        let ph = (t * 2.6 + fi * 0.377).fract();
+        let y = -24.0 + ph * 120.0;
+        let len = 10.0 + (fi * 1.7).sin().abs() * 10.0;
+        let al = rk * 0.45 * (1.0 - (ph - 0.5).abs() * 2.0).max(0.0);
+        pl.line_segment([o(x, y), o(x, y + len)], Stroke::new(1.2, fade(rgb(0x9e, 0xf6, 0xff), al)));
+    }
+    let flick = 1.0 + 0.22 * (t * 37.0).sin() + 0.12 * (t * 23.0).sin();
+    let fl = 22.0 * flick;
+    // smoke puffs drifting away below
+    for i in 0..8 {
+        let fi = i as f32;
+        let ph = (t * 1.3 + fi / 8.0).fract();
+        let x = 23.0 + (fi * 2.1).sin() * (3.0 + ph * 16.0);
+        let y = 62.0 + fl * 0.7 + ph * 36.0;
+        pl.circle_filled(q(x, y), 2.5 + ph * 6.0, fade(rgba(190, 205, 230, 0.3), rk * (1.0 - ph)));
+    }
+    // flame: glow, then orange, yellow and a white-hot core
+    radial(p, q(23.0, 66.0 + fl * 0.3), 22.0, fade(rgb(0xff, 0x8a, 0x3d), 0.45 * rk));
+    flame(p, &q, 60.0, 6.5, fl, fade(rgb(0xff, 0x6b, 0x2d), 0.9 * rk));
+    flame(p, &q, 60.0, 4.3, fl * 0.7, fade(rgb(0xff, 0xd2, 0x4d), rk));
+    flame(p, &q, 60.0, 2.2, fl * 0.38, fade(Color32::WHITE, rk));
+    // fins
+    let finc = fade(rgb(0xff, 0x4f, 0x8b), rk);
+    p.add(Shape::convex_polygon(vec![q(15.0, 44.0), q(15.0, 57.0), q(7.0, 61.0), q(8.0, 52.0)], finc, Stroke::NONE));
+    p.add(Shape::convex_polygon(vec![q(31.0, 44.0), q(38.0, 52.0), q(39.0, 61.0), q(31.0, 57.0)], finc, Stroke::NONE));
+    // body: a shaded cylinder with a stripe and a porthole, then the nozzle
+    let body = Rect::from_min_max(q(14.0, 26.0), q(32.0, 58.0));
+    hgrad(p, body, 7.0, &[(0.0, fade(rgb(0x8c, 0x9c, 0xb6), rk)), (0.42, fade(rgb(0xf4, 0xf8, 0xff), rk)), (1.0, fade(rgb(0x5a, 0x68, 0x84), rk))]);
+    fill(p, Rect::from_min_max(q(14.0, 45.0), q(32.0, 48.5)), 0.0, fade(rgb(0xff, 0x4f, 0x8b), rk));
+    p.circle_filled(q(23.0, 52.5), 2.4, fade(rgb(0x1a, 0x2a, 0x44), rk));
+    p.circle_filled(q(23.0, 52.5), 1.5, fade(CYAN, rk));
+    fill(p, Rect::from_min_max(q(18.0, 57.0), q(28.0, 61.0)), 1.5, fade(rgb(0x3a, 0x44, 0x58), rk));
+}
+
+/// A teardrop flame hanging from (23, y0), `half_w` wide at the top, `len` long.
+fn flame(p: &Painter, q: &dyn Fn(f32, f32) -> Pos2, y0: f32, half_w: f32, len: f32, color: Color32) {
+    let n = 10;
+    let w = |u: f32| half_w * (1.0 - u).powf(0.7) * (1.0 + 0.25 * (u * std::f32::consts::PI).sin());
+    let mut pts: Vec<Pos2> = (0..=n).map(|i| {
+        let u = i as f32 / n as f32;
+        q(23.0 + w(u), y0 + u * len)
+    }).collect();
+    pts.extend((0..n).rev().map(|i| {
+        let u = i as f32 / n as f32;
+        q(23.0 - w(u), y0 + u * len)
+    }));
+    p.add(Shape::convex_polygon(pts, color, Stroke::NONE));
+}
+
+/// A little music note (head, stem, flag).
+fn note(p: &Painter, at: Pos2, c: Color32) {
+    p.add(egui::epaint::EllipseShape::filled(at, vec2(3.2, 2.4), c));
+    let top = at + vec2(2.8, -9.0);
+    p.line_segment([at + vec2(2.8, -0.5), top], Stroke::new(1.2, c));
+    p.add(Shape::line(vec![top, top + vec2(3.0, 2.0), top + vec2(4.0, 5.0)], Stroke::new(1.2, c)));
 }
 
 fn disc(p: &Painter, c: Pos2, r: f32, color: impl Fn(Pos2) -> Color32) {
@@ -905,7 +1125,7 @@ fn draw_fin(p: &Painter, a: Pos2, b: Pos2, left: bool, ang: f32, _s: f32) {
 
 // ---------------- bubble + toast ----------------
 fn draw_bubble(app: &mut App, ui: &mut Ui) {
-    let show = app.bubble.as_ref().is_some_and(|b| b.until > app.now) && app.mode == Mode::Collapsed;
+    let show = app.bubble.as_ref().is_some_and(|b| b.until > app.now) && app.mode == Mode::Collapsed && !crate::health::alert_visible(app);
     let o = app.a.v("bub_op", if show { 1.0 } else { 0.0 }, 0.25, EASE);
     let k = app.a.v("bub_k", if show { 1.0 } else { 0.0 }, 0.45, SPRING);
     let Some(b) = &app.bubble else { return };

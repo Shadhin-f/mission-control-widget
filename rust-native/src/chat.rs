@@ -77,7 +77,7 @@ impl App {
         self.be.ai_send(prov, text, mode);
     }
 
-    fn new_chat(&mut self, text: String) {
+    pub fn new_chat(&mut self, text: String) {
         self.be.claude.reset();
         self.be.codex.reset();
         self.chat.msgs.clear();

@@ -359,6 +359,7 @@ fn overview(app: &mut App, ui: &mut Ui) {
         }
         yy += 12.6 + 3.0;
     }
+    crate::health::card_ui(app, ui);
 }
 
 pub fn legend(p: &Painter, h: Rect, items: &[(Color32, &str)]) {
@@ -1297,6 +1298,15 @@ fn settings(app: &mut App, ui: &mut Ui) {
     }
     rows.push(("hideSidesUntilHover", "Show sides only on hover".into(), "Keep only the pet visible when collapsed. Hover to reveal both sides; click the pet to open Mission Control.".into()));
     rows.push(("idleOnFullscreen", "Idle during fullscreen".into(), "Hide and stop all sampling while a game or video is fullscreen.".into()));
+    rows.push((
+        "healthChecks",
+        "Health checks".into(),
+        if ai {
+            "At startup and when the PC is under strain (CPU pinned, RAM full, hot GPU, disk full), a small model (Haiku, or Codex's smallest) takes a quick look and suggests a fix. Fix it hands the job to the top model (Opus / Codex at high effort) in your permission mode.".into()
+        } else {
+            "At startup and when the PC is under strain (CPU pinned, RAM full, hot GPU, disk full), pop up a warning and log it. Connect Claude Code or Codex for AI checks and one-click fixes.".into()
+        },
+    ));
     rows.push(("collapseOnBlur", "Collapse when clicking away".into(), "Fold back into the notch when another window gets focus.".into()));
     if app.has_ai("claude") {
         rows.push(("autoLimits", "Auto-refresh Claude limits".into(), "Every 10 min while a 5-hour window is open, using a tiny Haiku request. Chat replies always update them.".into()));

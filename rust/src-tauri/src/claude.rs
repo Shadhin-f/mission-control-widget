@@ -90,11 +90,13 @@ pub struct Claude {
     probing: AtomicBool,
     on_event: EventFn,
     on_limits: LimitsFn,
+    /// (model, effort) for this chat instead of Claude Code's defaults; cleared by `reset`
+    pub model_override: Mutex<Option<(String, String)>>,
 }
 
 impl Claude {
     pub fn new(on_event: EventFn, on_limits: LimitsFn) -> Arc<Self> {
-        Arc::new(Self { exe: Mutex::new(find_claude()), session: Mutex::new(None), child: Mutex::new(None), stopped: AtomicBool::new(false), probing: AtomicBool::new(false), on_event, on_limits })
+        Arc::new(Self { exe: Mutex::new(find_claude()), session: Mutex::new(None), child: Mutex::new(None), stopped: AtomicBool::new(false), probing: AtomicBool::new(false), on_event, on_limits, model_override: Mutex::new(None) })
     }
 
     pub fn found(&self) -> bool {
@@ -123,6 +125,9 @@ impl Claude {
         c.args(["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-mode", &mode, "--permission-prompts", "none", "--append-system-prompt", &system_prompt()]);
         if let Some(s) = self.session.lock().unwrap().clone() {
             c.args(["--resume", &s]);
+        }
+        if let Some((m, e)) = self.model_override.lock().unwrap().clone() {
+            c.args(["--model", &m, "--effort", &e]);
         }
         c.current_dir(home()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         #[cfg(unix)]
@@ -290,5 +295,34 @@ impl Claude {
     pub fn reset(&self) {
         self.stop();
         *self.session.lock().unwrap() = None;
+        *self.model_override.lock().unwrap() = None;
+    }
+
+    /// One quick answer from Haiku with no tools and no saved session (it can only read the prompt).
+    /// Separate from the chat, so it never interrupts a conversation. None on any failure or timeout.
+    #[allow(dead_code)] // used by the native edition's health checks
+    pub async fn quick(&self, system: &str, prompt: &str, timeout_s: u64) -> Option<String> {
+        let exe = self.exe.lock().unwrap().clone().or_else(find_claude)?;
+        let mut c = cli_cmd(&exe);
+        c.args(["-p", "--model", "haiku", "--effort", "low", "--tools", "", "--system-prompt", system, "--strict-mcp-config", "--no-session-persistence", "--disable-slash-commands", "--output-format", "json"])
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let mut child = c.spawn().ok()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(prompt.as_bytes()).await;
+        }
+        let mut out = String::new();
+        let mut so = child.stdout.take()?;
+        let read = tokio::time::timeout(std::time::Duration::from_secs(timeout_s), so.read_to_string(&mut out)).await;
+        let _ = child.kill().await;
+        read.ok()?.ok()?;
+        let v: Value = serde_json::from_str(out.trim()).ok()?;
+        if v["is_error"].as_bool().unwrap_or(false) {
+            return None;
+        }
+        v["result"].as_str().map(String::from)
     }
 }

@@ -8,6 +8,30 @@ and Extreme mode, with the same sizes, colours, easing curves and timings (porte
 contributors, and a **Power** tab (Windows): live power draw and what it costs per day, week, month
 and year.
 
+## Health checks and the pet's moods
+
+The widget watches for trouble: a check runs shortly after startup, whenever the PC is under real strain
+(CPU above 92% for 90 s, RAM above 92% for 30 s, the GPU at 84°C or more for 30 s, a disk under 6% free,
+or heavy load for over a minute), and after a fullscreen session of 5 minutes or more. Each kind of
+check waits 20 minutes before it can run again (6 hours for a full disk).
+
+- With **Claude Code** connected, Haiku (low effort, no tools, no saved session) reads a snapshot of the
+  stats and the busiest processes and replies with a verdict, a suggestion and, when an agent could
+  help, a fix. With **Codex**, its smallest listed model does the same at low reasoning effort in a
+  read-only sandbox. Without either, the widget still warns, using its own reading.
+- Findings pop up under the notch. **Fix it** opens the chat and hands the job to the top model (Opus at
+  high effort, or Codex at high reasoning effort), under your chat permission mode. It is told to check
+  the current state first and to ask before closing apps, deleting anything or changing settings.
+- Every check (with its snapshot) and an hourly summary of CPU, RAM, GPU and network are kept in
+  `health-log.json` next to the settings. The Overview tab lists recent checks, has a **Check now**
+  button, and shows the last 24 hours' peaks. Settings → *Health checks* turns it all off.
+
+The pet gets **comfy** after 10 minutes of everything being normal (CPU under 60%, RAM under 85%, no
+open warning, someone at the PC): happy eyes and blush, and every 18–38 s a jolly bit (a double hop, a
+little dance, a tune or a sparkly wink). While the network moves at **10 MB/s or more** (either
+direction) it rides a **rocket**, with a flickering flame, smoke and speed lines, until the speed has
+stayed under 8 MB/s for 3 s.
+
 ## Power and electricity cost
 
 The Power tab works on any Windows PC. It detects the CPU and every graphics adapter, and reads each
@@ -130,6 +154,8 @@ This verifies the bundle and six read-only native helper queries, captures all U
 | `MC_DEV_QUIT_AFTER=<s>` | Quit normally after that many seconds (tests that Extreme mode restores everything) |
 | `MC_DOCK_DEBUG=1` | Log the dock's apps and how their icons resolved |
 | `MC_SHOTS_WAIT=<s>`, `MC_SHOTS_SCROLL=<px>` | With `MC_SHOTS`: wait before the first shot (default 6 s; ~100 fills the charts) / hold pages scrolled down |
+| `MC_PET_TEST=rocket\|comfy\|jolly0..3` | Hold the pet on the rocket, comfy, or repeating one jolly bit (0 hop, 1 dance, 2 tune, 3 wink) |
+| `MC_HEALTH_DEMO=1` | Show a sample health finding (popup and Overview card) without running a check |
 | `MC_DIAG_POWER=1` | Log every power reading: each part, its source, the totals and projections |
 | `MC_POWER_ESTIMATE=1` | Ignore the CPU and NVIDIA sensors, to see what a PC without them gets |
 | `MC_DIAG_FPS=1`, `MC_DIAG_ANIM=1` | Log every frame / every running animation (to find what keeps the widget repainting) |

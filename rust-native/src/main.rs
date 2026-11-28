@@ -53,6 +53,7 @@ mod draw;
 mod dock;
 #[cfg(windows)]
 mod edge;
+mod health;
 mod icons;
 mod idle;
 mod notch;

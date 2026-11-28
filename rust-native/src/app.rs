@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 pub const WIN_W: f32 = 800.0;
 pub const WIN_H: f32 = 700.0;
 /// Small while collapsed (only the notch, bubble and toast) so idle compositing stays cheap.
-pub const SMALL_H: f32 = 150.0;
+pub const SMALL_H: f32 = 196.0;
 pub const CX: f32 = WIN_W / 2.0;
 pub const BAR_H: f32 = 46.0;
 pub const TABS_H: f32 = 40.0;
@@ -177,6 +177,9 @@ pub struct App {
     pub be: Arc<Backend>,
     pub power: Arc<crate::power::PowerMon>,
     pub pw: crate::power_page::PowerUi,
+    pub health: crate::health::Health,
+    /// when the current fullscreen idle began (app clock)
+    pub idle_since: f64,
     pub q: Arc<Mutex<VecDeque<(String, Value)>>>,
     pub a: Anims,
     pub ptr: Arc<Mutex<Pointer>>,
@@ -289,6 +292,8 @@ impl App {
             ctx: ctx.clone(),
             power: crate::power::PowerMon::start(be.clone()),
             pw: Default::default(),
+            health: Default::default(),
+            idle_since: 0.0,
             be,
             q,
             a: Anims::new(),
@@ -639,6 +644,7 @@ impl App {
     fn on_event(&mut self, ch: &str, v: Value) {
         match ch {
             "stats" => self.on_stats(v),
+            "health" => crate::health::on_result(self, v),
             "latency" => self.on_latency(v),
             "speed:progress" => self.on_speed(v),
             "r:speed" => self.on_speed_done(v),
@@ -755,6 +761,11 @@ impl App {
         }
         self.idle = full;
         self.be.idle.store(full, Ordering::SeqCst);
+        if full {
+            self.idle_since = self.now;
+        } else if self.idle_since > 0.0 {
+            crate::health::after_fullscreen(self, self.now - self.idle_since);
+        }
         #[cfg(windows)]
         self.dock.send(crate::dock::Msg::Idle(full));
         if full {
@@ -791,8 +802,9 @@ impl App {
         push(&mut self.hist.up, s["net"]["up"].as_f64().unwrap_or(0.0));
         self.hist_scroll.push(self.now);
         self.last_push = self.now;
-        // pet reactions
-        if cpu > 90.0 {
+        // pet reactions (the health watch takes these over while it's on)
+        let watch = self.set_bool("healthChecks");
+        if cpu > 90.0 && !watch {
             if self.hot_since == 0.0 {
                 self.hot_since = now_ms();
             }
@@ -802,15 +814,16 @@ impl App {
         } else {
             self.hot_since = 0.0;
         }
-        if ram > 92.0 {
+        if ram > 92.0 && !watch {
             let (u, t) = (s["mem"]["used"].as_f64().unwrap_or(0.0), total);
             self.say(format!("RAM is almost full: {} of {}", fmt_bytes(u, 1), fmt_bytes(t, 1)), Some("ram"), 4200.0, 120000.0);
         }
-        if let Some(d) = s["disks"].as_array().and_then(|a| a.iter().find(|d| d["free"].as_f64().unwrap_or(1.0) / d["total"].as_f64().unwrap_or(1.0).max(1.0) < 0.06)) {
+        if let Some(d) = s["disks"].as_array().and_then(|a| a.iter().find(|d| d["free"].as_f64().unwrap_or(1.0) / d["total"].as_f64().unwrap_or(1.0).max(1.0) < 0.06)).filter(|_| !watch) {
             let msg = format!("{} is almost full ({} left). Try the Cleaner.", d["drive"].as_str().unwrap_or(""), fmt_bytes(d["free"].as_f64().unwrap_or(0.0), 1));
             self.say(msg, Some("disk"), 5000.0, 30.0 * 60000.0);
         }
         self.stats = s;
+        crate::health::on_stats(self);
     }
 
     /// Advance the history charts' scroll for this frame. Call once per frame from the page that draws them.

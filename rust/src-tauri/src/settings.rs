@@ -20,6 +20,7 @@ pub fn defaults() -> Settings {
         "extremeMode": false,
         "extremeBackup": null,
         "speedHistory": [],
+        "healthChecks": true,
     });
     match v {
         Value::Object(m) => m,
